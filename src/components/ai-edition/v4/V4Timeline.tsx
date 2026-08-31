@@ -1,4 +1,5 @@
 import {
+	Clapperboard,
 	Clock,
 	Crosshair,
 	Loader2,
@@ -27,6 +28,13 @@ import { fromFileUrl } from "@/components/video-editor/projectPersistence";
 import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
+import {
+	applyCreatorTheme,
+	buildCreatorEditPrompt,
+	CREATOR_THEMES,
+	type CreatorThemeId,
+	getCreatorTheme,
+} from "@/lib/ai-edition/creatorEdit";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
@@ -413,6 +421,8 @@ export function V4Timeline({
 
 	const [autoEnhanceOpen, setAutoEnhanceOpen] = useState(false);
 	const [autoBusy, setAutoBusy] = useState(false);
+	const [creatorThemeId, setCreatorThemeId] = useState<CreatorThemeId>("social-punch");
+	const creatorTheme = useMemo(() => getCreatorTheme(creatorThemeId), [creatorThemeId]);
 	// The AI cut pass reads the transcript, and the transcript is produced in the
 	// background (see transcriptionStore). Until it is there, the entry says why
 	// rather than handing the agent a prompt it cannot honour — the failure mode
@@ -1090,6 +1100,45 @@ export function V4Timeline({
 		useChatPromptBus.getState().submit(AI_ENHANCE_PROMPT);
 	}, []);
 
+	// The deterministic half of a creator edit: frame, composition, caption style,
+	// and sparse transcript-keyword reactions. It needs no provider and persists as
+	// one undoable operation. Cuts remain an AI decision because a keyword heuristic
+	// is not qualified to decide which spoken material is disposable.
+	const runQuickCreatorStyle = useCallback(async () => {
+		setAutoEnhanceOpen(false);
+		const store = useProjectStore.getState();
+		if (!store.document) {
+			toast.error(t("toolbar.importRecordingFirst"));
+			return;
+		}
+		setAutoBusy(true);
+		try {
+			const applied = applyCreatorTheme(store.document, creatorThemeId);
+			const saved = await store.saveDocument(applied.document, { history: true });
+			if (!saved) return;
+			toast.success(t("toolbar.quickStyleApplied", { theme: creatorTheme.label }), {
+				description: applied.hasTranscript
+					? t("toolbar.quickStyleVisuals", { count: applied.visualsAdded })
+					: t("toolbar.quickStyleNeedsTranscript"),
+			});
+		} catch (err) {
+			toast.error(t("toolbar.quickStyleFailed"), {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		} finally {
+			setAutoBusy(false);
+		}
+	}, [creatorTheme, creatorThemeId, t]);
+
+	// The complete pass uses whichever provider is selected in AI Settings. This
+	// includes a local OpenAI-compatible endpoint such as the user's Qwen model.
+	const runAiCreatorEdit = useCallback(() => {
+		setAutoEnhanceOpen(false);
+		useChatPromptBus
+			.getState()
+			.submit(buildCreatorEditPrompt(creatorThemeId), "toolbar.creatorEditRequested");
+	}, [creatorThemeId]);
+
 	const isPillSelected = (id: string) =>
 		tl.selection?.id === id || tl.multiSelection.some((m) => m.id === id);
 	// Optimistic preview: during a clip-reorder drag, slide each region pill by
@@ -1292,8 +1341,100 @@ export function V4Timeline({
 							>
 								<div
 									className={styles.recMenu}
-									style={{ position: "relative", bottom: "auto", width: 244 }}
+									style={{ position: "relative", bottom: "auto", width: 310 }}
 								>
+									<div
+										style={{
+											padding: "10px 10px 8px",
+											borderBottom: "1px solid var(--border)",
+										}}
+									>
+										<div style={{ fontSize: 11, fontWeight: 700, color: "var(--fg-2)" }}>
+											{t("toolbar.creatorTheme")}
+										</div>
+										<div
+											style={{
+												display: "grid",
+												gridTemplateColumns: "1fr 1fr",
+												gap: 6,
+												marginTop: 7,
+											}}
+										>
+											{CREATOR_THEMES.map((theme) => {
+												const selected = theme.id === creatorThemeId;
+												return (
+													<button
+														type="button"
+														key={theme.id}
+														onClick={() => setCreatorThemeId(theme.id)}
+														aria-pressed={selected}
+														title={theme.description}
+														style={{
+															border: `1px solid ${selected ? "var(--accent)" : "var(--border)"}`,
+															borderRadius: 8,
+															background: selected
+																? "color-mix(in srgb, var(--accent) 14%, var(--surface))"
+																: "var(--surface)",
+															color: "var(--fg)",
+															padding: "7px 8px",
+															fontSize: 11,
+															fontWeight: selected ? 700 : 600,
+															textAlign: "left",
+															cursor: "pointer",
+														}}
+													>
+														{theme.label}
+													</button>
+												);
+											})}
+										</div>
+										<div
+											style={{
+												marginTop: 6,
+												fontSize: 10,
+												lineHeight: 1.35,
+												color: "var(--muted)",
+											}}
+										>
+											{creatorTheme.description}
+										</div>
+									</div>
+									<button
+										type="button"
+										className={styles.recMenuRow}
+										onClick={() => void runQuickCreatorStyle()}
+									>
+										<Clapperboard size={15} style={{ flexShrink: 0 }} />
+										<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+											<span style={{ fontWeight: 600 }}>{t("toolbar.quickStyle")}</span>
+											<span style={{ fontSize: 11, color: "var(--muted)" }}>
+												{t("toolbar.quickStyleHint")}
+											</span>
+										</span>
+									</button>
+									<button
+										type="button"
+										className={styles.recMenuRow}
+										onClick={runAiCreatorEdit}
+										disabled={smartCutsBlocked}
+										title={transcriptGate.reason === "failed" ? transcriptGate.message : undefined}
+										style={smartCutsBlocked ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
+									>
+										{transcriptGate.state === "pending" ? (
+											<Loader2 size={15} className="animate-spin" style={{ flexShrink: 0 }} />
+										) : (
+											<Sparkles size={15} style={{ flexShrink: 0 }} />
+										)}
+										<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+											<span style={{ fontWeight: 600 }}>{t("toolbar.creatorEdit")}</span>
+											<span style={{ fontSize: 11, color: "var(--muted)" }}>
+												{transcriptGate.state === "ready"
+													? t("toolbar.creatorEditHint")
+													: smartCutsHint}
+											</span>
+										</span>
+									</button>
+									<div style={{ height: 1, background: "var(--border)", margin: "2px 8px" }} />
 									<button
 										type="button"
 										className={styles.recMenuRow}

@@ -140,6 +140,9 @@ const DECLARED: WritePath[] = [
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	// The window is closing and the user answered "save".
 	w("src/components/ai-edition/NewEditorShell.tsx", "unsubSaveBeforeClose", "save", "gesture"),
+	// Auto-enhance > Quick Style: one click applies the selected creator theme as
+	// one undoable document edit (format, captions, and optional visual cues).
+	w("src/components/ai-edition/v4/V4Timeline.tsx", "runQuickCreatorStyle", "save", "gesture"),
 
 	// The agent's document. The optimistic write is not the edit — the save is, and
 	// it names the pre-agent document as what Ctrl+Z returns to.

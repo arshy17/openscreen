@@ -14,6 +14,12 @@ export const ANNOTATION_ICON_PRESETS = [
 	{ id: "warning", glyph: "!" },
 	{ id: "target", glyph: "◎" },
 	{ id: "dot", glyph: "●" },
+	{ id: "idea", glyph: "💡" },
+	{ id: "fire", glyph: "🔥" },
+	{ id: "celebrate", glyph: "🎉" },
+	{ id: "thumbs-up", glyph: "👍" },
+	{ id: "question", glyph: "?" },
+	{ id: "lightning", glyph: "⚡" },
 ] as const;
 
 export type AnnotationIconPreset = (typeof ANNOTATION_ICON_PRESETS)[number]["id"];

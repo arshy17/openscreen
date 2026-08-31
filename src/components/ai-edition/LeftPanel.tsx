@@ -732,16 +732,16 @@ export function ChatStripPanel() {
 	// message shows in the composer's history exactly as if typed.
 	// The confirmation toast lives here because only this side knows the prompt
 	// was taken — send() bounces it to the settings modal with no provider.
-	// ponytail: one producer today, so the toast copy is assumed to be its own.
-	// A second producer needs the bus to carry its confirmation string.
+	// The bus carries its own confirmation key because Smart cuts and the full
+	// Creator Edit share this path but promise different scopes.
 	const pendingPrompt = useChatPromptBus((s) => s.pending);
 	const consumePrompt = useChatPromptBus((s) => s.consume);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: send() is intentionally not a dep (recreated each render); consume() clears `pending` so this fires once per queued prompt.
 	useEffect(() => {
 		if (!pendingPrompt || !projectId || busy) return;
 		consumePrompt();
-		if (canChat) toast.success(tTimeline("toolbar.aiEnhanceRequested"));
-		void send(pendingPrompt);
+		if (canChat) toast.success(tTimeline(pendingPrompt.confirmationKey));
+		void send(pendingPrompt.text);
 	}, [pendingPrompt, projectId, busy, consumePrompt, canChat, tTimeline]);
 
 	// ponytail: per-user-message rewind. Pops a confirmation popover, then

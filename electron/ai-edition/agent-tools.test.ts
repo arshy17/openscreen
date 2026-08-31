@@ -721,6 +721,20 @@ describe("executeAgentTool", () => {
 		expect(() => documentSchema.parse(changed.document)).not.toThrow();
 	});
 
+	it("adds creator emoji icons through the same offline annotation path", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addAnnotation",
+			JSON.stringify({ startSec: 1, endSec: 2, icon: "idea" }),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.document?.annotations[0]).toMatchObject({
+			content: "💡",
+			textContent: "💡",
+			style: { fontSize: 72, textAnimation: "pop" },
+		});
+	});
+
 	it("sets vertical social output and transcript-derived caption styling", () => {
 		const formatted = executeAgentTool(
 			fixtureDocument(),

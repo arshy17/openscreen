@@ -166,7 +166,7 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	setSpeed:
 		"Move, resize, or change the multiplier of an existing speed region by id (virtual-timeline seconds). Only the fields you pass are changed.",
 	addAnnotation:
-		"Add a text annotation or built-in icon over a span of the edited timeline (virtual seconds). x/y are frame percentages (0–100, default centre). Text supports colour, background colour, size and animation (none, fade, rise, pop, slide-left, typewriter, pulse). For icons pass one of sparkles, star, check, arrow, heart, warning, target or dot; icons remain editable offline text glyphs and default to a pop animation.",
+		"Add a text annotation or built-in icon over a span of the edited timeline (virtual seconds). x/y are frame percentages (0–100, default centre). Text supports colour, background colour, size and animation (none, fade, rise, pop, slide-left, typewriter, pulse). For icons pass one of sparkles, star, check, arrow, heart, warning, target, dot, idea, fire, celebrate, thumbs-up, question or lightning; icons remain editable offline glyphs and default to a pop animation.",
 	setAnnotation:
 		"Move, resize, restyle, animate, or edit the text/icon of an existing annotation by id (virtual-timeline seconds). x/y are frame percentages. Only the fields you pass are changed.",
 	setOutputFormat:
