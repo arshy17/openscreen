@@ -88,6 +88,7 @@ import {
 } from "../recording/nativeWindowsCaptureStop";
 import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
+import { requestMacScreenAccess } from "./macScreenAccess";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
 
@@ -1744,15 +1745,9 @@ export function registerIpcHandlers(
 			return { success: true, granted: true, status: "granted" };
 		}
 
-		try {
-			const status = systemPreferences.getMediaAccessStatus("screen");
-			if (status === "granted") {
-				return { success: true, granted: true, status };
-			}
-
-			// Screen recording has no askForMediaAccess equivalent, so trigger the
-			// TCC prompt without opening OpenScreen's source selector above it.
-			if (status === "not-determined") {
+		return requestMacScreenAccess({
+			getStatus: () => systemPreferences.getMediaAccessStatus("screen"),
+			focusForPrompt: () => {
 				const mainWin = getMainWindow();
 				if (mainWin && !mainWin.isDestroyed()) {
 					if (!mainWin.isVisible()) {
@@ -1761,19 +1756,16 @@ export function registerIpcHandlers(
 					mainWin.focus();
 				}
 				app.focus({ steal: true });
-				desktopCapturer
-					.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
-					.catch(() => {
-						// Permission probing failure is reported by the explicit status check below.
-					});
-				return { success: true, granted: false, status: "not-determined" };
-			}
-
-			return { success: true, granted: false, status };
-		} catch (error) {
-			console.error("Failed to request screen access:", error);
-			return { success: false, granted: false, status: "unknown", error: String(error) };
-		}
+			},
+			probe: () =>
+				desktopCapturer.getSources({
+					types: ["screen"],
+					thumbnailSize: { width: 1, height: 1 },
+				}),
+			onProbeError: (error) => {
+				console.warn("Failed to start the macOS screen access probe:", error);
+			},
+		});
 	}
 
 	ipcMain.handle("get-sources", async (_, opts) => {
@@ -1977,14 +1969,15 @@ export function registerIpcHandlers(
 		if (!access.granted) {
 			if (process.platform === "darwin" && access.status !== "not-determined") {
 				const mainWin = getMainWindow();
+				const appName =
+					path.basename(app.getPath("exe")).trim() || app.getName().trim() || "OpenScreen";
 				const messageOptions = {
 					type: "warning",
 					buttons: ["Open System Settings", "Cancel"],
 					defaultId: 0,
 					cancelId: 1,
 					message: "Screen Recording permission is required",
-					detail:
-						"Allow OpenScreen in macOS System Settings, then come back and choose a screen or window.",
+					detail: `Allow ${appName} in the top “Screen & System Audio Recording” list in macOS System Settings. Access under “System Audio Recording Only” is not enough. Then reopen ${appName} and choose a screen or window.`,
 				} satisfies Electron.MessageBoxOptions;
 				const result =
 					mainWin && !mainWin.isDestroyed()
