@@ -142,6 +142,34 @@ async function streamAgent(
 }
 
 describe("runChat tool loop", () => {
+	it("runs a loopback OpenAI-compatible model without an API key", async () => {
+		const session = createSession("proj_local_no_key");
+		const localConfig = {
+			getConfig: () => ({
+				provider: "openai-compatible",
+				model: "qwen3.8:27b-q6_k-64k",
+				baseUrl: "http://127.0.0.1:11434/v1",
+			}),
+			getCredential: () => null,
+		} as unknown as LlmConfigStore;
+
+		const result = await runChat(
+			"proj_local_no_key",
+			session.id,
+			"make this a Reel",
+			localConfig,
+			fixtureDocument(),
+		);
+
+		expect(result.success).toBe(true);
+		expect(invokeMock).toHaveBeenCalledOnce();
+		expect(invokeMock.mock.calls[0][0].model).toMatchObject({
+			provider: "openai-compatible",
+			model: "qwen3.8:27b-q6_k-64k",
+			baseUrl: "http://127.0.0.1:11434/v1",
+		});
+	});
+
 	it("executes tool calls, chains turns, and returns the mutated document", async () => {
 		invokeMock.mockImplementationOnce(async (args) => {
 			args.sink.toolStart("addTrim", { startSec: 5, endSec: 8, reason: "silence" });

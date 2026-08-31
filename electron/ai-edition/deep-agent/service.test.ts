@@ -71,6 +71,8 @@ const ARGS: Record<string, unknown> = {
 	setSpeed: { speedId: "speed_nope" },
 	addAnnotation: { startSec: 1, endSec: 2, text: "hi" },
 	setAnnotation: { annotationId: "ann_nope" },
+	setOutputFormat: { aspectRatio: "9:16" },
+	setCaptions: { preset: "social" },
 	addCameraFullscreen: { startSec: 1, endSec: 2 },
 	setCameraFullscreen: { cameraFullscreenId: "cam_nope" },
 	removeTrim: { trimRangeId: "trim_1" },
@@ -160,7 +162,7 @@ function recordingSink(): { sink: OpenScreenAgentSink; events: SinkEvent[] } {
 }
 
 /** `buildTools` returns a tuple with a DISTINCT type per tool, one per zod
- * schema, so `tools.find(...)` is a 21-way union — and `.invoke` is generic, a
+ * schema, so `tools.find(...)` is a 23-way union — and `.invoke` is generic, a
  * shape TypeScript will not call through a union (TS2349). Widening to the
  * interface every one of them implements is what the model is handed anyway:
  * `createAgent` takes them as `ClientTool`, i.e. exactly this. Nothing the

@@ -7,7 +7,7 @@
 // points at one of those endpoints, or an auth kind the app no longer implements.
 
 import { describe, expect, it } from "vitest";
-import { PROVIDER_DEFINITIONS } from "./provider-registry";
+import { isLocalOpenAICompatible, PROVIDER_DEFINITIONS } from "./provider-registry";
 
 const FIRST_PARTY_ONLY_HOSTS = [
 	"chatgpt.com/backend-api",
@@ -33,5 +33,23 @@ describe("PROVIDER_DEFINITIONS", () => {
 		const ids = PROVIDER_DEFINITIONS.map((def) => def.id);
 		expect(ids).not.toContain("openai-oauth");
 		expect(ids).not.toContain("copilot-proxy");
+	});
+});
+
+describe("isLocalOpenAICompatible", () => {
+	it.each([
+		"http://127.0.0.1:11434/v1",
+		"http://localhost:1234/v1",
+		"http://127.12.0.5:8080/v1",
+	])("accepts a loopback endpoint without an API key: %s", (baseUrl) => {
+		expect(isLocalOpenAICompatible("openai-compatible", baseUrl)).toBe(true);
+	});
+
+	it.each([
+		["openai", "http://127.0.0.1:11434/v1"],
+		["openai-compatible", "https://models.example.com/v1"],
+		["openai-compatible", "not-a-url"],
+	])("keeps remote or unrelated providers authenticated", (provider, baseUrl) => {
+		expect(isLocalOpenAICompatible(provider, baseUrl)).toBe(false);
 	});
 });

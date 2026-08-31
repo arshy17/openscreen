@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { safeStorage } from "electron";
+import { isLocalOpenAICompatible } from "./provider-registry";
 
 export interface LlmConfig {
 	provider: string;
@@ -54,20 +55,34 @@ export class LlmConfigStore {
 	private readonly credentialsPath: string;
 	private config: LlmConfig | null = null;
 	private credentials: LlmCredentials = {};
+	private credentialsLoaded = false;
 
 	constructor(userDataPath: string) {
 		this.configPath = path.join(userDataPath, "llm-config.json");
 		this.credentialsPath = path.join(userDataPath, "llm-credentials.enc");
-		this.loadSync();
+		this.loadConfigSync();
+		// A loopback OpenAI-compatible server needs no secret. Avoid touching the
+		// Keychain at all in that case: ad-hoc preview builds get a new code identity
+		// after every update, so decrypting an unused old credential can otherwise
+		// block the editor behind a Keychain authorization prompt.
+		if (!this.usesLocalNoAuth()) this.loadCredentialsSync();
 	}
 
-	private loadSync(): void {
+	private loadConfigSync(): void {
 		try {
 			const raw = readFileSync(this.configPath, "utf8");
 			this.config = JSON.parse(raw);
 		} catch {
 			this.config = null;
 		}
+	}
+
+	private usesLocalNoAuth(): boolean {
+		return isLocalOpenAICompatible(this.config?.provider, this.config?.baseUrl);
+	}
+
+	private loadCredentialsSync(): void {
+		if (this.credentialsLoaded) return;
 		try {
 			const encrypted = readFileSync(this.credentialsPath);
 			if (safeStorage.isEncryptionAvailable()) {
@@ -77,10 +92,18 @@ export class LlmConfigStore {
 		} catch {
 			this.credentials = {};
 		}
+		this.credentialsLoaded = true;
+	}
+
+	private ensureCredentialsLoaded(): void {
+		if (!this.credentialsLoaded) this.loadCredentialsSync();
 	}
 
 	async load(): Promise<void> {
-		this.loadSync();
+		this.loadConfigSync();
+		this.credentials = {};
+		this.credentialsLoaded = false;
+		if (!this.usesLocalNoAuth()) this.loadCredentialsSync();
 	}
 
 	getConfig(): LlmConfig | null {
@@ -108,6 +131,8 @@ export class LlmConfigStore {
 				return { value: envValue, entry };
 			}
 		}
+		if (providerId === "openai-compatible" && this.usesLocalNoAuth()) return null;
+		this.ensureCredentialsLoaded();
 		const stored = this.credentials[providerId];
 		if (!stored) return null;
 		if (typeof stored === "string") {
@@ -134,6 +159,7 @@ export class LlmConfigStore {
 	 * (kind = "codex" / "github-device"). Pass an empty `apiKey` to clear.
 	 */
 	async setCredential(providerId: string, entry: LlmCredential): Promise<void> {
+		this.ensureCredentialsLoaded();
 		if (!entry.apiKey) {
 			delete this.credentials[providerId];
 		} else {
@@ -143,6 +169,7 @@ export class LlmConfigStore {
 	}
 
 	async removeCredential(providerId: string): Promise<void> {
+		this.ensureCredentialsLoaded();
 		delete this.credentials[providerId];
 		await this.saveCredentials();
 	}
@@ -152,6 +179,7 @@ export class LlmConfigStore {
 	 * from `LlmConfig` (caller's job). Used by `llmDisconnect` in the IPC service.
 	 */
 	async clearAll(): Promise<void> {
+		this.ensureCredentialsLoaded();
 		this.credentials = {};
 		await this.saveCredentials();
 	}

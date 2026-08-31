@@ -62,4 +62,27 @@ describe("AiEditionService — LLM store resolution is deferred", () => {
 		await service.llmGetSnapshot();
 		expect(builds()).toBe(1);
 	});
+
+	it("recognises a loopback OpenAI-compatible server without reading Keychain credentials", async () => {
+		let credentialReads = 0;
+		const store = {
+			getConfig: () => ({
+				provider: "openai-compatible",
+				model: "qwen3.8:27b-q6_k-64k",
+				baseUrl: "http://127.0.0.1:11434/v1",
+			}),
+			getCredential: () => {
+				credentialReads += 1;
+				return null;
+			},
+		} as unknown as LlmConfigStore;
+		const service = new AiEditionService({
+			documents: { listProjects: async () => [] },
+			llmConfig: () => store,
+		} as unknown as AiEditionServiceOptions);
+
+		const snapshot = await service.llmGetSnapshot();
+		expect(snapshot.connectedProviders).toContain("openai-compatible");
+		expect(credentialReads).toBe(0);
+	});
 });

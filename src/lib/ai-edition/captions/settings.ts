@@ -9,7 +9,7 @@
 // `legacyEditor` passthrough blob), so caption settings round-trip through save
 // / load / undo with every other appearance setting and need no schema bump.
 
-import { clamp } from "@/utils/math";
+import { clamp } from "../../../utils/math";
 import type { AxcutDocument } from "../schema";
 
 /**

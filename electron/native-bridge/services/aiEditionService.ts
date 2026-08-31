@@ -30,7 +30,7 @@ import {
 	listOpenRouterModels,
 	probeMiniMaxModels,
 } from "../../ai-edition/llm-provider-auth";
-import { PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
+import { isLocalOpenAICompatible, PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
 
 export interface AiEditionServiceOptions {
 	documents: DocumentService;
@@ -164,11 +164,15 @@ export class AiEditionService {
 
 	async llmGetSnapshot(): Promise<AiEditionLlmSnapshot> {
 		const config = this.llmConfig.getConfig();
+		const localNoAuth = isLocalOpenAICompatible(config?.provider, config?.baseUrl);
 		const credentialSummary: AiEditionLlmSnapshot["credentialSummary"] = [];
 		const connectedProviders: string[] = [];
 		for (const def of PROVIDER_DEFINITIONS) {
-			const resolved = this.llmConfig.getCredential(def.id, def.envKeys);
-			const connected = Boolean(resolved);
+			// Do not ask the Keychain about unrelated cloud providers while a
+			// loopback model is active. Switching providers still resolves their
+			// credentials on demand; the local editor simply has no secret to read.
+			const resolved = localNoAuth ? null : this.llmConfig.getCredential(def.id, def.envKeys);
+			const connected = Boolean(resolved) || (localNoAuth && def.id === "openai-compatible");
 			if (connected) connectedProviders.push(def.id);
 			credentialSummary.push({
 				providerId: def.id,
@@ -233,10 +237,15 @@ export class AiEditionService {
 		try {
 			const def = PROVIDER_DEFINITIONS.find((d) => d.id === providerId);
 			if (!def) return { models: [], error: `Unknown provider ${providerId}` };
-			const cred = this.llmConfig.getCredential(providerId, def.envKeys);
-			if (!cred) return { models: [], error: "Not connected" };
 			const config = this.llmConfig.getConfig();
 			const baseUrl = (config?.provider === providerId ? config.baseUrl : undefined) ?? def.baseUrl;
+			const localNoAuth = isLocalOpenAICompatible(providerId, baseUrl);
+			if (localNoAuth) {
+				if (!baseUrl) return { models: [], error: "Missing base URL" };
+				return { models: await listOpenAiCompatibleModels(baseUrl) };
+			}
+			const cred = this.llmConfig.getCredential(providerId, def.envKeys);
+			if (!cred) return { models: [], error: "Not connected" };
 
 			if (providerId === "anthropic") {
 				return { models: await listAnthropicModels(cred.value) };

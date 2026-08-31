@@ -2,7 +2,7 @@
 // copied verbatim (only the annotation param type changed to structurally
 // match `AxcutAnnotationRegion` instead of the legacy `AnnotationRegion`).
 
-import { clamp01 } from "@/utils/math";
+import { clamp01 } from "../../../utils/math";
 
 export type AnnotationTextAnimation =
 	| "none"

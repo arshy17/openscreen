@@ -29,6 +29,7 @@ import {
 	textBackgroundColor,
 	toggleTextBackground,
 } from "@/lib/ai-edition/annotations/background";
+import { ANNOTATION_ICON_PRESETS } from "@/lib/ai-edition/annotations/iconPresets";
 import {
 	type AnnotationTextAnimation,
 	TEXT_ANIMATION_VALUES,
@@ -686,6 +687,48 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 							/>
 						</div>
 					) : null}
+					{region.type === "text"
+						? paneRow(
+								ts("annotation.quickIcons"),
+								<div style={{ display: "grid", gridTemplateColumns: "repeat(4, 32px)", gap: 6 }}>
+									{ANNOTATION_ICON_PRESETS.map((preset) => (
+										<button
+											key={preset.id}
+											type="button"
+											title={preset.id}
+											aria-label={`${ts("annotation.quickIcons")}: ${preset.id}`}
+											onClick={() => {
+												tl.updateAnnotationLive(region.id, {
+													content: preset.glyph,
+													textContent: preset.glyph,
+													style: {
+														...region.style,
+														fontSize: Math.max(region.style?.fontSize ?? 32, 64),
+														textAnimation:
+															region.style?.textAnimation && region.style.textAnimation !== "none"
+																? region.style.textAnimation
+																: "pop",
+													},
+												});
+												void tl.commitAnnotationChange();
+											}}
+											style={{
+												width: 32,
+												height: 32,
+												borderRadius: 8,
+												border: "1px solid var(--border)",
+												background: "var(--surface)",
+												color: "var(--fg)",
+												font: "700 18px/1 var(--font-display)",
+												cursor: "pointer",
+											}}
+										>
+											{preset.glyph}
+										</button>
+									))}
+								</div>,
+							)
+						: null}
 					{region.type === "image" ? (
 						<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
 							{/* Read as a data URL, which is what the renderer expects: `content` holds

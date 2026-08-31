@@ -29,6 +29,24 @@ export interface ProviderDefinition {
 	wireProtocol?: "anthropic" | "openai";
 }
 
+/**
+ * Local OpenAI-compatible servers (Ollama, LM Studio, llama.cpp) normally do
+ * not authenticate. Treat only loopback URLs as no-key providers: a remote
+ * custom endpoint must still supply its credential instead of silently sending
+ * an unauthenticated request across the network.
+ */
+export function isLocalOpenAICompatible(provider?: string, baseUrl?: string): boolean {
+	if (provider !== "openai-compatible" || !baseUrl) return false;
+	try {
+		const url = new URL(baseUrl);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+		const hostname = url.hostname.toLowerCase();
+		return hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
+	} catch {
+		return false;
+	}
+}
+
 export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 	{
 		id: "anthropic",

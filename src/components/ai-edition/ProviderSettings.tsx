@@ -26,6 +26,7 @@ import type { AiEditionLlmConfig, AiEditionLlmSnapshot } from "@/native/contract
 import {
 	getReasoningEffortLabel,
 	getReasoningEffortOptions,
+	isLocalOpenAICompatible,
 	PROVIDER_DEFINITIONS,
 	type ProviderDefinition,
 } from "../../../electron/ai-edition/provider-registry";
@@ -313,6 +314,7 @@ function ProviderForm({
 }) {
 	const te = useScopedT("editor");
 	const showBaseUrl = def.id === "openai-compatible" || Boolean(def.baseUrl);
+	const localNoAuth = isLocalOpenAICompatible(def.id, config?.baseUrl);
 	// Every provider exposes a live model list once connected: each hits its own
 	// /models endpoint, or a probe call for MiniMax.
 	const [modelOptions, setModelOptions] = useState<string[]>([]);
@@ -487,18 +489,20 @@ function ProviderForm({
 				</Field>
 			) : null}
 
-			<Field
-				label={te("providerSettings.apiKeyLabel")}
-				hint={isConnected ? te("providerSettings.apiKeyHintStored") : undefined}
-			>
-				<input
-					type="password"
-					value={apiKey}
-					placeholder={isConnected ? "••••••" : "sk-…"}
-					onChange={(e) => setApiKey(e.target.value)}
-					disabled={busy}
-				/>
-			</Field>
+			{!localNoAuth ? (
+				<Field
+					label={te("providerSettings.apiKeyLabel")}
+					hint={isConnected ? te("providerSettings.apiKeyHintStored") : undefined}
+				>
+					<input
+						type="password"
+						value={apiKey}
+						placeholder={isConnected ? "••••••" : "sk-…"}
+						onChange={(e) => setApiKey(e.target.value)}
+						disabled={busy}
+					/>
+				</Field>
+			) : null}
 
 			<Field
 				label={te("providerSettings.projectEditsLabel")}
@@ -573,7 +577,7 @@ function ProviderForm({
 						type="button"
 						className={`${styles.btn} ${styles.btnPrimary}`}
 						onClick={onSave}
-						disabled={busy || !apiKey.trim() || !config}
+						disabled={busy || (!apiKey.trim() && !localNoAuth) || !config}
 					>
 						{busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
 						{apiKey.trim() ? te("providerSettings.saveAndUse") : te("providerSettings.save")}

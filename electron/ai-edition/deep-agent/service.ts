@@ -46,7 +46,9 @@ import {
 	resolveCursorAssetId,
 	setAnnotationArgs,
 	setCameraFullscreenArgs,
+	setCaptionsArgs,
 	setClipRangeArgs,
+	setOutputFormatArgs,
 	setSpeedArgs,
 	setTrimArgs,
 	setZoomArgs,
@@ -114,7 +116,8 @@ const BASE_SYSTEM_PROMPT = [
 	"How the tools map to intent — pick the most specific one, and prefer the smallest edit that satisfies the request:",
 	"- Silences, pauses and dead stretches are removed as trims INSIDE the placed clip. Send them together with addTrims once you know the ranges; addTrim is for a single cut or a correction. The placed clip stays the canonical cut; it is not rebuilt to drop them.",
 	"- Changing where a clip starts or ends within its source is setClipRange — the clip's in/out, distinct from a trim.",
-	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen. addCameraFullscreen enlarges the webcam, and only does something where assets[].hasCameraTrack is true.`,
+	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts animated text or a built-in icon on screen. addCameraFullscreen enlarges the webcam, and only does something where assets[].hasCameraTrack is true.`,
+	"- setOutputFormat sets the finished frame: 9:16 for Reels, Shorts and TikTok; 4:5 for an Instagram portrait post; 1:1 for square social video. setCaptions enables and styles transcript-derived captions; the social preset uses shorter, larger lines and keeps them above vertical-platform controls.",
 	"- moveClip changes the order of placed clips, one call per clip that moves, preserving ids, source ranges, trims and anchored effects. replaceTimeline rebuilds the timeline from kept intervals and sorts them, so it cannot reorder anything.",
 	"- Deleting is a first-class action, not a workaround: removeTrim, removeModifier, removeClip. Never fake a deletion by re-adding an element or zeroing it out (span 0, speed 1×) — that leaves it in the document and misreports what you did.",
 	"If nothing in the list does what was asked, say so; do not approximate it with a bigger tool.",
@@ -163,9 +166,13 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	setSpeed:
 		"Move, resize, or change the multiplier of an existing speed region by id (virtual-timeline seconds). Only the fields you pass are changed.",
 	addAnnotation:
-		"Add a text annotation over a span of the edited timeline (virtual seconds). x/y are frame percentages (0–100, default centre). Use for callouts and labels.",
+		"Add a text annotation or built-in icon over a span of the edited timeline (virtual seconds). x/y are frame percentages (0–100, default centre). Text supports colour, background colour, size and animation (none, fade, rise, pop, slide-left, typewriter, pulse). For icons pass one of sparkles, star, check, arrow, heart, warning, target or dot; icons remain editable offline text glyphs and default to a pop animation.",
 	setAnnotation:
-		"Move, resize, or edit the text of an existing annotation by id (virtual-timeline seconds). Only the fields you pass are changed.",
+		"Move, resize, restyle, animate, or edit the text/icon of an existing annotation by id (virtual-timeline seconds). x/y are frame percentages. Only the fields you pass are changed.",
+	setOutputFormat:
+		"Set the output frame ratio without changing source footage. Use 9:16 for Instagram Reels, YouTube Shorts and TikTok, 4:5 for Instagram portrait posts, or 1:1 for square social video; 16:9, 4:3, 16:10 and 10:16 are also available.",
+	setCaptions:
+		"Enable, disable, or style captions derived from the project transcript. preset 'social' makes large short lines and applies a vertical safe inset for Reels/Shorts/TikTok controls; 'clean' is the standard readable plate; 'minimal' removes the plate. You can override typography, colours, opacity, anchor, inset and words per line. If the result says hasTranscript:false, the style was saved but no caption text can appear until the recording is transcribed — do not claim visible captions.",
 	addCameraFullscreen:
 		"Add a camera-fullscreen region over a span of the edited timeline (virtual seconds): the webcam fills the frame for that span. This only does something when the footage under that span comes from an asset with a linked webcam — check assets[].hasCameraTrack (or hasAnyCamera) in getCurrentDocument first. On footage with no camera the call is refused rather than storing a region that would render nothing; say so instead of retrying.",
 	setCameraFullscreen:
@@ -337,6 +344,8 @@ export function buildTools(
 		build("setSpeed", setSpeedArgs),
 		build("addAnnotation", addAnnotationArgs),
 		build("setAnnotation", setAnnotationArgs),
+		build("setOutputFormat", setOutputFormatArgs),
+		build("setCaptions", setCaptionsArgs),
 		build("addCameraFullscreen", addCameraFullscreenArgs),
 		build("setCameraFullscreen", setCameraFullscreenArgs),
 		build("removeTrim", removeTrimArgs),

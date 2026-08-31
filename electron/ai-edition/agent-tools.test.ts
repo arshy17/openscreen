@@ -185,7 +185,9 @@ describe("the mutating-tool table", () => {
 				"replaceTimeline",
 				"setAnnotation",
 				"setCameraFullscreen",
+				"setCaptions",
 				"setClipRange",
+				"setOutputFormat",
 				"setSpeed",
 				"setTrim",
 				"setZoom",
@@ -196,6 +198,8 @@ describe("the mutating-tool table", () => {
 		expect(isMutatingTool("replaceTimeline")).toBe(true);
 		expect(isMutatingTool("addZoom")).toBe(true);
 		expect(isMutatingTool("setAnnotation")).toBe(true);
+		expect(isMutatingTool("setOutputFormat")).toBe(true);
+		expect(isMutatingTool("setCaptions")).toBe(true);
 		expect(isMutatingTool("removeTrim")).toBe(true);
 		expect(isMutatingTool("removeModifier")).toBe(true);
 		expect(isMutatingTool("removeClip")).toBe(true);
@@ -212,6 +216,8 @@ describe("executeAgentTool", () => {
 		expect(snapshot.clips.map((c: { id: string }) => c.id)).toEqual(["clip_1", "clip_2"]);
 		expect(snapshot.trimRanges[0].id).toBe("trim_1");
 		expect(snapshot.hasTranscript).toBe(true);
+		expect(snapshot.output.aspectRatio).toBe("16:9");
+		expect(snapshot.captions).toMatchObject({ enabled: false, insetY: 1.5 });
 		expect(result.document).toBeUndefined();
 	});
 
@@ -673,6 +679,113 @@ describe("executeAgentTool", () => {
 			position: { x: 20, y: 80 },
 		});
 		expect(() => documentSchema.parse(result.document)).not.toThrow();
+	});
+
+	it("adds and restyles animated built-in icons through the text renderer", () => {
+		const added = executeAgentTool(
+			fixtureDocument(),
+			"addAnnotation",
+			JSON.stringify({
+				startSec: 1,
+				endSec: 3,
+				icon: "sparkles",
+				color: "#ffcc00",
+			}),
+		);
+		expect(added.ok).toBe(true);
+		const annotation = added.document?.annotations[0];
+		expect(annotation).toMatchObject({
+			content: "✦",
+			textContent: "✦",
+			style: { color: "#ffcc00", fontSize: 72, textAnimation: "pop" },
+		});
+
+		const changed = executeAgentTool(
+			added.document as AxcutDocument,
+			"setAnnotation",
+			JSON.stringify({
+				annotationId: annotation?.id,
+				icon: "check",
+				x: 88,
+				y: 12,
+				fontSize: 90,
+				animation: "pulse",
+			}),
+		);
+		expect(changed.ok).toBe(true);
+		expect(changed.document?.annotations[0]).toMatchObject({
+			content: "✓",
+			position: { x: 88, y: 12 },
+			style: { fontSize: 90, textAnimation: "pulse" },
+		});
+		expect(() => documentSchema.parse(changed.document)).not.toThrow();
+	});
+
+	it("sets vertical social output and transcript-derived caption styling", () => {
+		const formatted = executeAgentTool(
+			fixtureDocument(),
+			"setOutputFormat",
+			JSON.stringify({ aspectRatio: "9:16" }),
+		);
+		expect(formatted.ok).toBe(true);
+		const captioned = executeAgentTool(
+			formatted.document as AxcutDocument,
+			"setCaptions",
+			JSON.stringify({ preset: "social" }),
+		);
+		expect(captioned.ok).toBe(true);
+		const legacy = captioned.document?.legacyEditor as Record<string, unknown>;
+		expect(legacy.aspectRatio).toBe("9:16");
+		expect(legacy.captions).toMatchObject({
+			enabled: true,
+			fontSize: 56,
+			insetY: 12.5,
+			insetX: 5,
+			maxWordsPerLine: 5,
+		});
+		const snapshot = JSON.parse(
+			executeAgentTool(captioned.document as AxcutDocument, "getCurrentDocument", "").resultJson,
+		);
+		expect(snapshot.output.aspectRatio).toBe("9:16");
+		expect(snapshot.captions).toMatchObject({ enabled: true, insetY: 12.5 });
+		expect(() => documentSchema.parse(captioned.document)).not.toThrow();
+	});
+
+	it("keeps preset captions platform-safe when the AI sets captions before the format", () => {
+		const captioned = executeAgentTool(
+			fixtureDocument(),
+			"setCaptions",
+			JSON.stringify({ preset: "social" }),
+		);
+		const landscapeCaptions = (
+			captioned.document?.legacyEditor as { captions: { insetX: number; insetY: number } }
+		).captions;
+		expect(landscapeCaptions.insetY).toBe(1.5);
+
+		const formatted = executeAgentTool(
+			captioned.document as AxcutDocument,
+			"setOutputFormat",
+			JSON.stringify({ aspectRatio: "9:16" }),
+		);
+		const captions = (
+			formatted.document?.legacyEditor as { captions: { insetX: number; insetY: number } }
+		).captions;
+		expect(captions).toMatchObject({ insetY: 12.5, insetX: 5 });
+	});
+
+	it("does not claim caption text exists before transcription", () => {
+		const withoutTranscript = { ...fixtureDocument(), transcripts: [], transcript: null };
+		const result = executeAgentTool(
+			withoutTranscript,
+			"setCaptions",
+			JSON.stringify({ preset: "social" }),
+		);
+		expect(result.ok).toBe(true);
+		expect(JSON.parse(result.resultJson)).toMatchObject({
+			hasTranscript: false,
+			note: expect.stringMatching(/transcribe/i),
+		});
+		expect(result.summary).toMatch(/transcript still needed/);
 	});
 
 	it("snapshot exposes clips/trims/effects as virtual-time groups with a time-base note", () => {

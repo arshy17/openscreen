@@ -16,6 +16,17 @@
 // described are gone (see `MUTATING_TOOL_NAMES`).
 
 import { z } from "zod";
+import {
+	ANNOTATION_ICON_VALUES,
+	annotationIconGlyph,
+} from "../../src/lib/ai-edition/annotations/iconPresets";
+import { TEXT_ANIMATION_VALUES } from "../../src/lib/ai-edition/annotations/textAnimation";
+import {
+	type CaptionSettings,
+	defaultCaptionInsetX,
+	defaultCaptionInsetY,
+	getCaptionSettings,
+} from "../../src/lib/ai-edition/captions/settings";
 import { createId } from "../../src/lib/ai-edition/document/ids";
 import {
 	moveClip,
@@ -47,6 +58,7 @@ import {
 	effectiveZoomScale,
 	ZOOM_DEPTH_LEGEND,
 } from "../../src/lib/ai-edition/timeline/zoom-scale";
+import { getAspectRatioValue, isAspectRatio } from "../../src/utils/aspectRatioUtils";
 
 export interface AgentToolExecution {
 	ok: boolean;
@@ -429,6 +441,9 @@ export const getCursorTrackArgs = z.object({
 // and trims, which are source-time. The executor converts to the stored ms.
 const depthSchema = z.number().int().min(1).max(6);
 const focusSchema = z.object({ cx: z.number().min(0).max(1), cy: z.number().min(0).max(1) });
+const textAnimationSchema = z.enum(TEXT_ANIMATION_VALUES);
+const hexColorSchema = z.string().regex(/^#[0-9a-f]{6}$/i, "Expected a six-digit hex colour");
+const annotationBackgroundSchema = z.union([hexColorSchema, z.literal("transparent")]);
 
 export const addZoomArgs = z.object({
 	startSec: secondsSchema,
@@ -468,8 +483,13 @@ export const addAnnotationArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 	text: z.string().default(""),
+	icon: z.enum(ANNOTATION_ICON_VALUES).optional(),
 	x: z.number().min(0).max(100).default(50),
 	y: z.number().min(0).max(100).default(50),
+	fontSize: z.number().min(8).max(200).optional(),
+	color: hexColorSchema.default("#ffffff"),
+	backgroundColor: annotationBackgroundSchema.default("transparent"),
+	animation: textAnimationSchema.optional(),
 });
 
 export const setAnnotationArgs = z.object({
@@ -477,6 +497,34 @@ export const setAnnotationArgs = z.object({
 	startSec: secondsSchema.optional(),
 	endSec: secondsSchema.optional(),
 	text: z.string().optional(),
+	icon: z.enum(ANNOTATION_ICON_VALUES).optional(),
+	x: z.number().min(0).max(100).optional(),
+	y: z.number().min(0).max(100).optional(),
+	fontSize: z.number().min(8).max(200).optional(),
+	color: hexColorSchema.optional(),
+	backgroundColor: annotationBackgroundSchema.optional(),
+	animation: textAnimationSchema.optional(),
+});
+
+export const setOutputFormatArgs = z.object({
+	aspectRatio: z.enum(["16:9", "9:16", "1:1", "4:3", "4:5", "16:10", "10:16"]),
+});
+
+export const setCaptionsArgs = z.object({
+	enabled: z.boolean().default(true),
+	preset: z.enum(["social", "clean", "minimal"]).optional(),
+	fontSize: z.number().min(12).max(200).optional(),
+	fontWeight: z.enum(["normal", "bold"]).optional(),
+	color: hexColorSchema.optional(),
+	backgroundEnabled: z.boolean().optional(),
+	backgroundColor: hexColorSchema.optional(),
+	backgroundOpacity: z.number().min(0).max(1).optional(),
+	anchorV: z.enum(["bottom", "top"]).optional(),
+	anchorH: z.enum(["left", "center", "right"]).optional(),
+	insetY: z.number().min(0).max(50).optional(),
+	insetX: z.number().min(0).max(50).optional(),
+	minWordsPerLine: z.number().int().min(1).max(12).optional(),
+	maxWordsPerLine: z.number().int().min(1).max(12).optional(),
 });
 
 export const addCameraFullscreenArgs = z.object({
@@ -539,6 +587,8 @@ export const OPENSCREEN_TOOL_NAMES = [
 	"setSpeed",
 	"addAnnotation",
 	"setAnnotation",
+	"setOutputFormat",
+	"setCaptions",
 	"addCameraFullscreen",
 	"setCameraFullscreen",
 	"removeTrim",
@@ -605,6 +655,8 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"setSpeed",
 	"addAnnotation",
 	"setAnnotation",
+	"setOutputFormat",
+	"setCaptions",
 	"addCameraFullscreen",
 	"setCameraFullscreen",
 	"removeTrim",
@@ -618,6 +670,71 @@ export function isMutatingTool(name: string): boolean {
 
 function roundSec(ms: number): number {
 	return Math.round(ms) / 1000;
+}
+
+type AgentCaptionSettings = CaptionSettings;
+
+function outputAspectValue(document: AxcutDocument): number {
+	const legacy = (document.legacyEditor as Record<string, unknown> | null) ?? {};
+	return getAspectRatioValue(isAspectRatio(legacy.aspectRatio) ? legacy.aspectRatio : "16:9");
+}
+
+function captionSafeInsets(token: unknown): { insetX: number; insetY: number } {
+	const value = getAspectRatioValue(isAspectRatio(token) ? token : "16:9");
+	return { insetX: defaultCaptionInsetX(value), insetY: defaultCaptionInsetY(value) };
+}
+
+function captionSettingsFor(document: AxcutDocument): AgentCaptionSettings {
+	return getCaptionSettings(document, outputAspectValue(document));
+}
+
+function captionPreset(
+	document: AxcutDocument,
+	preset: z.infer<typeof setCaptionsArgs>["preset"],
+): Partial<AgentCaptionSettings> {
+	const legacy = (document.legacyEditor as Record<string, unknown> | null) ?? {};
+	const safeInsets = captionSafeInsets(legacy.aspectRatio);
+	if (preset === "social") {
+		return {
+			fontSize: 56,
+			fontWeight: "bold",
+			backgroundEnabled: true,
+			backgroundColor: "#000000",
+			backgroundOpacity: 0.65,
+			anchorV: "bottom",
+			anchorH: "center",
+			...safeInsets,
+			minWordsPerLine: 2,
+			maxWordsPerLine: 5,
+		};
+	}
+	if (preset === "minimal") {
+		return {
+			fontSize: 44,
+			fontWeight: "bold",
+			backgroundEnabled: false,
+			anchorV: "bottom",
+			anchorH: "center",
+			...safeInsets,
+			minWordsPerLine: 2,
+			maxWordsPerLine: 6,
+		};
+	}
+	if (preset === "clean") {
+		return {
+			fontSize: 48,
+			fontWeight: "bold",
+			backgroundEnabled: true,
+			backgroundColor: "#000000",
+			backgroundOpacity: 0.55,
+			anchorV: "bottom",
+			anchorH: "center",
+			...safeInsets,
+			minWordsPerLine: 2,
+			maxWordsPerLine: 7,
+		};
+	}
+	return {};
 }
 
 // Compact projection of the document for the model: everything it needs to
@@ -663,6 +780,7 @@ export function documentSnapshotForModel(
 	// second thing to be confidently wrong about, so the projection reports the
 	// EFFECTIVE mode and the flag that decides it.
 	const autoFocusAll = legacy?.autoFocusAll === true;
+	const captions = captionSettingsFor(document);
 	return {
 		timeBaseNote:
 			"clips and trims are in source-time seconds; zooms, speedRegions, annotations and cameraFullscreenRegions are in virtual (edited-timeline) seconds.",
@@ -672,6 +790,8 @@ export function documentSnapshotForModel(
 			"a setZoom that only changes depth on such a zoom clears customScale so the depth takes effect.",
 		project: { id: document.project.id, title: document.project.title },
 		primaryAssetId: document.project.primaryAssetId ?? document.assets[0]?.id ?? null,
+		output: { aspectRatio: legacy?.aspectRatio ?? "16:9" },
+		captions,
 		autoFocusAll,
 		hasAnyCamera: hasAnyClipWithCamera(document.assets, document.timeline.clips),
 		cursorNote:
@@ -749,6 +869,11 @@ export function documentSnapshotForModel(
 			endSec: roundSec(a.endMs),
 			type: a.type,
 			text: a.textContent ?? a.content ?? "",
+			position: a.position,
+			fontSize: a.style.fontSize,
+			color: a.style.color,
+			backgroundColor: a.style.backgroundColor,
+			animation: a.style.textAnimation ?? "none",
 		})),
 		cameraFullscreenRegions: coalesceForAgent(cameraFullscreenRegions).map((c) => ({
 			id: c.id,
@@ -1676,24 +1801,27 @@ export function executeAgentTool(
 			if (!parsed.success) return failure(parsed.error.message);
 			const startMs = toMs(Math.min(parsed.data.startSec, parsed.data.endSec));
 			const endMs = toMs(Math.max(parsed.data.startSec, parsed.data.endSec));
+			const content = parsed.data.icon ? annotationIconGlyph(parsed.data.icon) : parsed.data.text;
+			const animation = parsed.data.animation ?? (parsed.data.icon ? "pop" : undefined);
 			const ann = {
 				id: createId("ann"),
 				startMs,
 				endMs,
 				type: "text" as const,
-				content: parsed.data.text,
-				textContent: parsed.data.text,
+				content,
+				textContent: content,
 				position: { x: parsed.data.x, y: parsed.data.y },
 				size: { width: 30, height: 20 },
 				style: {
-					color: "#ffffff",
-					backgroundColor: "transparent",
-					fontSize: 32,
+					color: parsed.data.color,
+					backgroundColor: parsed.data.backgroundColor,
+					fontSize: parsed.data.fontSize ?? (parsed.data.icon ? 72 : 32),
 					fontFamily: "Inter",
 					fontWeight: "bold" as const,
 					fontStyle: "normal" as const,
 					textDecoration: "none" as const,
 					textAlign: "center" as const,
+					...(animation ? { textAnimation: animation } : {}),
 				},
 				zIndex: document.annotations.length + 1,
 			};
@@ -1711,10 +1839,13 @@ export function executeAgentTool(
 				document: next,
 				resultJson: JSON.stringify({
 					annotationId: landing.ids[0],
+					content,
+					...(parsed.data.icon ? { icon: parsed.data.icon } : {}),
+					...(animation ? { animation } : {}),
 					...landingReport(landing, startMs / 1000, endMs / 1000),
 				}),
 				summary:
-					`added annotation "${parsed.data.text.slice(0, 24)}" ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					`added ${parsed.data.icon ? `${parsed.data.icon} icon` : `annotation "${content.slice(0, 24)}"`} ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
 					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
@@ -1732,9 +1863,31 @@ export function executeAgentTool(
 					annPill.has(a.id)
 						? {
 								...a,
-								...(parsed.data.text !== undefined
-									? { content: parsed.data.text, textContent: parsed.data.text }
+								...(parsed.data.icon !== undefined || parsed.data.text !== undefined
+									? {
+											content: parsed.data.icon
+												? annotationIconGlyph(parsed.data.icon)
+												: parsed.data.text,
+											textContent: parsed.data.icon
+												? annotationIconGlyph(parsed.data.icon)
+												: parsed.data.text,
+										}
 									: {}),
+								position: {
+									x: parsed.data.x ?? a.position.x,
+									y: parsed.data.y ?? a.position.y,
+								},
+								style: {
+									...a.style,
+									...(parsed.data.fontSize !== undefined ? { fontSize: parsed.data.fontSize } : {}),
+									...(parsed.data.color !== undefined ? { color: parsed.data.color } : {}),
+									...(parsed.data.backgroundColor !== undefined
+										? { backgroundColor: parsed.data.backgroundColor }
+										: {}),
+									...(parsed.data.animation !== undefined
+										? { textAnimation: parsed.data.animation }
+										: {}),
+								},
 							}
 						: a,
 				),
@@ -1764,6 +1917,80 @@ export function executeAgentTool(
 				summary:
 					`updated annotation ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
 					landingSuffix(landing, startMs / 1000, endMs / 1000),
+			};
+		}
+
+		case "setOutputFormat": {
+			const parsed = setOutputFormatArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const legacy = (document.legacyEditor as Record<string, unknown> | null) ?? {};
+			const rawCaptions =
+				typeof legacy.captions === "object" && legacy.captions !== null
+					? (legacy.captions as Record<string, unknown>)
+					: null;
+			const oldSafe = captionSafeInsets(legacy.aspectRatio);
+			const newSafe = captionSafeInsets(parsed.data.aspectRatio);
+			const captions = rawCaptions
+				? {
+						...rawCaptions,
+						...(rawCaptions.insetX === oldSafe.insetX ? { insetX: newSafe.insetX } : {}),
+						...(rawCaptions.insetY === oldSafe.insetY ? { insetY: newSafe.insetY } : {}),
+					}
+				: undefined;
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: {
+					...legacy,
+					aspectRatio: parsed.data.aspectRatio,
+					...(captions ? { captions } : {}),
+				},
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ aspectRatio: parsed.data.aspectRatio }),
+				summary: `set output format to ${parsed.data.aspectRatio}`,
+			};
+		}
+
+		case "setCaptions": {
+			const parsed = setCaptionsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const legacy = (document.legacyEditor as Record<string, unknown> | null) ?? {};
+			const existing = captionSettingsFor(document);
+			const { preset, ...explicit } = parsed.data;
+			const nextCaptions: AgentCaptionSettings = {
+				...existing,
+				...captionPreset(document, preset),
+				...explicit,
+			};
+			if (nextCaptions.minWordsPerLine > nextCaptions.maxWordsPerLine) {
+				const min = nextCaptions.maxWordsPerLine;
+				nextCaptions.maxWordsPerLine = nextCaptions.minWordsPerLine;
+				nextCaptions.minWordsPerLine = min;
+			}
+			const hasTranscript = document.transcripts.length > 0 || document.transcript !== null;
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: { ...legacy, captions: nextCaptions },
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					captions: nextCaptions,
+					...(preset ? { preset } : {}),
+					hasTranscript,
+					...(!hasTranscript && nextCaptions.enabled
+						? {
+								note: "Captions are enabled and styled, but no transcript exists yet; transcribe the recording before claiming captions are visible.",
+							}
+						: {}),
+				}),
+				summary:
+					`${nextCaptions.enabled ? "enabled" : "disabled"} captions` +
+					(preset ? ` with the ${preset} preset` : "") +
+					(!hasTranscript && nextCaptions.enabled ? " (transcript still needed)" : ""),
 			};
 		}
 

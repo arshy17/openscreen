@@ -33,7 +33,7 @@ import {
 import type { CursorTelemetryReader } from "./deep-agent/service";
 import type { DocumentService } from "./document-service";
 import type { LlmConfigStore } from "./llm-config-store";
-import { PROVIDER_DEFINITIONS } from "./provider-registry";
+import { isLocalOpenAICompatible, PROVIDER_DEFINITIONS } from "./provider-registry";
 
 const sessionsByProject = new Map<string, Map<string, ChatSession>>();
 
@@ -313,7 +313,7 @@ export async function runChat(
 
 	const credential = llmConfig.getCredential(def.id, def.envKeys);
 	const apiKey = credential?.value ?? null;
-	if (!apiKey && def.authKind === "api-key") {
+	if (!apiKey && def.authKind === "api-key" && !isLocalOpenAICompatible(def.id, config.baseUrl)) {
 		return {
 			success: false,
 			error: `No API key for ${def.label}. Add one in Settings → AI.`,

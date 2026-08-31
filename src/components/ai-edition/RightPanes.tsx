@@ -84,6 +84,12 @@ import {
 import { useCanSegmentCamera } from "../../native/hooks/useSegmentationSupport";
 import styles from "./NewEditorShell.module.css";
 
+const SOCIAL_FORMAT_HINTS: Record<string, string> = {
+	"9:16": "Reels · Shorts · TikTok",
+	"4:5": "Instagram portrait",
+	"1:1": "Instagram · LinkedIn",
+};
+
 interface PaneProps {
 	title: string;
 	icon: ReactNode;
@@ -1746,6 +1752,9 @@ export function VideoEffectsPane() {
 									}}
 								>
 									<span className={styles.actionMenuMain}>{ratio}</span>
+									{SOCIAL_FORMAT_HINTS[ratio] ? (
+										<span className={styles.actionMenuMeta}>{SOCIAL_FORMAT_HINTS[ratio]}</span>
+									) : null}
 								</button>
 							))}
 							{/* The timeline's own shapes stay listed here, and NOT only behind "fit":
