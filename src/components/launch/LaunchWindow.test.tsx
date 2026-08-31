@@ -1018,6 +1018,43 @@ describe("LaunchWindow device buttons", () => {
 		expect(video.srcObject).toBe(previewStream);
 	});
 
+	it("lets the self-view move independently and keeps it inside the HUD window", async () => {
+		recorderState.value.webcamEnabled = true;
+		recorderState.value.webcamPreviewStream = {} as MediaStream;
+		Object.defineProperty(window, "innerWidth", { value: 800, configurable: true });
+		Object.defineProperty(window, "innerHeight", { value: 600, configurable: true });
+
+		renderLaunchWindow();
+
+		const selfView = await screen.findByTestId("hud-webcam-self-view");
+		vi.spyOn(selfView, "getBoundingClientRect").mockReturnValue({
+			x: 290,
+			y: 300,
+			left: 290,
+			top: 300,
+			right: 510,
+			bottom: 424,
+			width: 220,
+			height: 124,
+			toJSON: () => ({}),
+		});
+		selfView.setPointerCapture = vi.fn();
+		selfView.hasPointerCapture = vi.fn(() => true);
+		selfView.releasePointerCapture = vi.fn();
+
+		fireEvent.pointerDown(selfView, { button: 0, pointerId: 7, clientX: 320, clientY: 330 });
+		fireEvent.pointerMove(selfView, { pointerId: 7, clientX: 920, clientY: 930 });
+
+		expect(selfView).toHaveStyle({ transform: "translate3d(282px, 168px, 0)" });
+		expect(selfView).toHaveAttribute("data-dragging", "true");
+
+		fireEvent.pointerUp(selfView, { pointerId: 7 });
+		expect(selfView).toHaveAttribute("data-dragging", "false");
+
+		fireEvent.doubleClick(selfView);
+		expect(selfView.style.transform).toBe("");
+	});
+
 	it("keeps the self-view visible while recording", async () => {
 		recorderState.value.webcamEnabled = true;
 		recorderState.value.webcamPreviewStream = {} as MediaStream;

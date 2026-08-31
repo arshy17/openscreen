@@ -296,7 +296,7 @@
 	 camera track remains a separate recording asset and is composed in the editor. */
 .hudWebcamSelfView {
 	position: relative;
-	pointer-events: none;
+	pointer-events: auto;
 	display: flex;
 	width: 220px;
 	aspect-ratio: 16 / 9;
@@ -307,6 +307,14 @@
 	border: 1px solid rgba(255, 255, 255, 0.14);
 	background: #0d1014;
 	box-shadow: 0 20px 44px -14px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
+	cursor: grab;
+	touch-action: none;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.hudWebcamSelfView[data-dragging="true"] {
+	cursor: grabbing;
 }
 
 .hudWebcamSelfViewVideo {
@@ -331,6 +339,28 @@
 	border-radius: 999px;
 	background: #ef4444;
 	box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.4);
+}
+
+.hudWebcamDragAffordance {
+	position: absolute;
+	top: 8px;
+	left: 50%;
+	transform: translateX(-50%);
+	padding: 2px 7px 4px;
+	border-radius: 999px;
+	background: rgba(0, 0, 0, 0.5);
+	color: rgba(255, 255, 255, 0.78);
+	font-size: 10px;
+	line-height: 0.7;
+	letter-spacing: 2px;
+	opacity: 0;
+	transition: opacity 120ms ease;
+	pointer-events: none;
+}
+
+.hudWebcamSelfView:hover .hudWebcamDragAffordance,
+.hudWebcamSelfView[data-dragging="true"] .hudWebcamDragAffordance {
+	opacity: 1;
 }
 
 /* Fixed width (not `100vw - 1rem`) for the same no-viewport-dependency reason. */

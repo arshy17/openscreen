@@ -28,7 +28,7 @@ import {
 	HudWindowControls,
 } from "./HudControls";
 import { HudDeviceSettings, type HudDeviceSettingsLabels } from "./HudDeviceSettings";
-import { HudWebcamSelfView } from "./HudWebcamSelfView";
+import { type HudWebcamOffset, HudWebcamSelfView } from "./HudWebcamSelfView";
 import {
 	computeHudBarMaxHeight,
 	computeHudModalMaxHeight,
@@ -132,6 +132,7 @@ export function LaunchWindow() {
 		null,
 	);
 	const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false);
+	const [webcamSelfViewOffset, setWebcamSelfViewOffset] = useState<HudWebcamOffset | null>(null);
 	/**
 	 * Narrower than [`isLinuxHud`] on purpose: without the helper the recorder
 	 * falls back to Chromium's capture, which DOES take a source id, so the
@@ -1102,6 +1103,8 @@ export function LaunchWindow() {
 								recording={recording}
 								previewLabel={deviceSettingsLabels.preview}
 								searchingLabel={deviceSettingsLabels.searching}
+								position={webcamSelfViewOffset}
+								onPositionChange={setWebcamSelfViewOffset}
 							/>
 						)}
 
