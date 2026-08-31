@@ -291,6 +291,48 @@
 	transform: scaleX(-1);
 }
 
+/* Persistent self-view. It belongs to the HUD rather than the recording canvas,
+	 so it follows the HUD's platform-specific capture-exclusion policy. The actual
+	 camera track remains a separate recording asset and is composed in the editor. */
+.hudWebcamSelfView {
+	position: relative;
+	pointer-events: none;
+	display: flex;
+	width: 220px;
+	aspect-ratio: 16 / 9;
+	overflow: hidden;
+	align-items: center;
+	justify-content: center;
+	border-radius: 18px;
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	background: #0d1014;
+	box-shadow: 0 20px 44px -14px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.hudWebcamSelfViewVideo {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	transform: scaleX(-1);
+}
+
+.hudWebcamSelfViewFallback {
+	font-size: 11px;
+	font-style: italic;
+	color: rgba(255, 255, 255, 0.45);
+}
+
+.hudWebcamRecordingDot {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	width: 9px;
+	height: 9px;
+	border-radius: 999px;
+	background: #ef4444;
+	box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.4);
+}
+
 /* Fixed width (not `100vw - 1rem`) for the same no-viewport-dependency reason. */
 .hudNoticeColumn {
 	pointer-events: auto;

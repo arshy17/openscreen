@@ -51,6 +51,7 @@ const recorderState = vi.hoisted(() => ({
 		setMicrophoneDeviceId: vi.fn(),
 		setMicrophoneDeviceName: vi.fn(),
 		webcamEnabled: false,
+		webcamPreviewStream: null as MediaStream | null,
 		setWebcamEnabled: vi.fn(async () => true),
 		webcamDeviceId: undefined,
 		setWebcamDeviceId: vi.fn(),
@@ -294,6 +295,7 @@ function resetLaunchMocks() {
 	recorderState.value.setMicrophoneEnabled.mockClear();
 	recorderState.value.setMicrophoneDeviceId.mockClear();
 	recorderState.value.webcamEnabled = false;
+	recorderState.value.webcamPreviewStream = null;
 	recorderState.value.setWebcamEnabled.mockClear();
 	micDevicesState.value = [];
 	hudCursorListeners = [];
@@ -1001,6 +1003,33 @@ describe("LaunchWindow device buttons", () => {
 		await waitFor(() => {
 			expect(recorderState.value.setWebcamEnabled).toHaveBeenCalledWith(false);
 		});
+	});
+
+	it("shows the recorder camera stream as a persistent self-view", async () => {
+		const previewStream = {} as MediaStream;
+		recorderState.value.webcamEnabled = true;
+		recorderState.value.webcamPreviewStream = previewStream;
+
+		renderLaunchWindow();
+
+		const selfView = await screen.findByTestId("hud-webcam-self-view");
+		const video = screen.getByTestId("hud-webcam-self-view-video") as HTMLVideoElement;
+		expect(selfView).toHaveAttribute("data-recording", "false");
+		expect(video.srcObject).toBe(previewStream);
+	});
+
+	it("keeps the self-view visible while recording", async () => {
+		recorderState.value.webcamEnabled = true;
+		recorderState.value.webcamPreviewStream = {} as MediaStream;
+		recorderState.value.recording = true;
+
+		renderLaunchWindow();
+
+		expect(await screen.findByTestId("hud-webcam-self-view")).toHaveAttribute(
+			"data-recording",
+			"true",
+		);
+		expect(screen.getByTestId("hud-webcam-self-view-video")).toBeInTheDocument();
 	});
 });
 

@@ -103,6 +103,8 @@ type UseScreenRecorderReturn = {
 	systemAudioEnabled: boolean;
 	setSystemAudioEnabled: (enabled: boolean) => void;
 	webcamEnabled: boolean;
+	/** Live renderer-owned camera stream used for the HUD self-view. */
+	webcamPreviewStream: MediaStream | null;
 	setWebcamEnabled: (enabled: boolean) => Promise<boolean>;
 	cursorCaptureMode: CursorCaptureMode;
 	setCursorCaptureMode: (mode: CursorCaptureMode) => void;
@@ -241,6 +243,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [webcamDeviceName, setWebcamDeviceName] = useState<string | undefined>(undefined);
 	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
 	const [webcamEnabled, setWebcamEnabledState] = useState(false);
+	const [webcamPreviewStream, setWebcamPreviewStream] = useState<MediaStream | null>(null);
 	const [cursorCaptureMode, setCursorCaptureMode] = useState<CursorCaptureMode>("editable-overlay");
 	const [softwareEncoderFallbackNoticeVisible, setSoftwareEncoderFallbackNoticeVisible] =
 		useState(false);
@@ -381,6 +384,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 	const stopWebcamPreviewStream = useCallback(() => {
 		if (!webcamStream.current) {
+			setWebcamPreviewStream(null);
 			return;
 		}
 
@@ -390,6 +394,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			track.stop();
 		});
 		webcamStream.current = null;
+		setWebcamPreviewStream(null);
 		webcamReady.current = true;
 	}, []);
 
@@ -451,6 +456,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				stream.getVideoTracks().forEach((track) => {
 					track.onended = () => {
 						webcamStream.current = null;
+						setWebcamPreviewStream(null);
 						if (!restarting.current) {
 							setWebcamEnabledState(false);
 							toast.error(t("recording.cameraDisconnected"));
@@ -458,10 +464,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					};
 				});
 				webcamStream.current = stream;
+				setWebcamPreviewStream(stream);
 				webcamReady.current = true;
 			} catch (cameraError) {
 				if (!cancelled) {
 					console.warn("Failed to get webcam access:", cameraError);
+					setWebcamPreviewStream(null);
 					setWebcamEnabledState(false);
 					const isDeviceError =
 						cameraError instanceof DOMException &&
@@ -488,6 +496,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					track.stop();
 				});
 				webcamStream.current = null;
+				setWebcamPreviewStream(null);
 			}
 		};
 	}, [webcamEnabled, webcamDeviceId, t]);
@@ -2344,6 +2353,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		systemAudioEnabled,
 		setSystemAudioEnabled,
 		webcamEnabled,
+		webcamPreviewStream,
 		setWebcamEnabled,
 		cursorCaptureMode,
 		setCursorCaptureMode,

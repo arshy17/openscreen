@@ -28,6 +28,7 @@ import {
 	HudWindowControls,
 } from "./HudControls";
 import { HudDeviceSettings, type HudDeviceSettingsLabels } from "./HudDeviceSettings";
+import { HudWebcamSelfView } from "./HudWebcamSelfView";
 import {
 	computeHudBarMaxHeight,
 	computeHudModalMaxHeight,
@@ -99,6 +100,7 @@ export function LaunchWindow() {
 		systemAudioEnabled,
 		setSystemAudioEnabled,
 		webcamEnabled,
+		webcamPreviewStream,
 		setWebcamEnabled,
 		webcamDeviceId,
 		setWebcamDeviceId,
@@ -907,6 +909,7 @@ export function LaunchWindow() {
 	const versionLabel = appInfo ? t("deviceSettings.version", { version: appInfo.version }) : null;
 
 	const hasNotices = Boolean(systemLocaleSuggestion) || softwareEncoderFallbackNoticeVisible;
+	const showWebcamSelfView = webcamEnabled && !isDeviceSettingsOpen;
 
 	return (
 		// Avoid w-screen/h-screen: 100vw can exceed the inner layout width when scrollbars
@@ -1090,9 +1093,18 @@ export function LaunchWindow() {
 					</div>
 				</div>
 
-				{(isPopoverOpen || hasNotices) && (
+				{(isPopoverOpen || hasNotices || showWebcamSelfView) && (
 					// column-reverse: first child sits closest to the bar.
 					<div className={styles.hudAbove}>
+						{showWebcamSelfView && (
+							<HudWebcamSelfView
+								stream={webcamPreviewStream}
+								recording={recording}
+								previewLabel={deviceSettingsLabels.preview}
+								searchingLabel={deviceSettingsLabels.searching}
+							/>
+						)}
+
 						{isDeviceSettingsOpen && (
 							<HudDeviceSettings
 								micDevices={micDevices}
