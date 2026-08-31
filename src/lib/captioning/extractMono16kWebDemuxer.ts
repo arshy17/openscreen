@@ -6,8 +6,13 @@ const DECODE_QUEUE_BACKPRESSURE = 20;
 const SOURCE_LOAD_TIMEOUT_MS = 60_000;
 const READ_END_PADDING_SEC = 0.5;
 
-function webDemuxerWasmUrl(): string {
-	return new URL("../exporter/wasm/web-demuxer.wasm", window.location.href).href;
+export function webDemuxerWasmUrl(locationHref: string = window.location.href): string {
+	// Vite copies the demuxer beside index.html at dist/wasm. This URL is
+	// intentionally relative to the rendered page, not this TypeScript module:
+	// in a packaged build module source paths no longer exist, and resolving via
+	// ../exporter used to point outside dist and fail immediately with
+	// "Failed to fetch" whenever decodeAudioData needed the demuxer fallback.
+	return new URL("./wasm/web-demuxer.wasm", locationHref).href;
 }
 
 /** Mixes one WebCodecs AudioData frame down to mono (averaged across channels). */
