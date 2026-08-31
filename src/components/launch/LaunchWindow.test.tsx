@@ -226,6 +226,7 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 		getAppInfo: vi.fn(async () => appInfoState.value),
 		checkForUpdates: updateCheckMock,
 		setHudOverlaySize: vi.fn(),
+		setHudOverlayExpanded: vi.fn(),
 		setHudOverlayIgnoreMouseEvents: vi.fn(),
 		onHudOverlayCursor: vi.fn((callback) => {
 			hudCursorListeners.push(callback);
@@ -1018,7 +1019,19 @@ describe("LaunchWindow device buttons", () => {
 		expect(video.srcObject).toBe(previewStream);
 	});
 
-	it("lets the self-view move independently and keeps it inside the HUD window", async () => {
+	it("expands the transparent HUD surface while the webcam is enabled", async () => {
+		recorderState.value.webcamEnabled = true;
+
+		const { unmount } = renderLaunchWindow();
+
+		await waitFor(() => {
+			expect(window.electronAPI.setHudOverlayExpanded).toHaveBeenCalledWith(true);
+		});
+		unmount();
+		expect(window.electronAPI.setHudOverlayExpanded).toHaveBeenLastCalledWith(false);
+	});
+
+	it("lets the self-view move independently and reach the HUD surface corners", async () => {
 		recorderState.value.webcamEnabled = true;
 		recorderState.value.webcamPreviewStream = {} as MediaStream;
 		Object.defineProperty(window, "innerWidth", { value: 800, configurable: true });
@@ -1045,7 +1058,7 @@ describe("LaunchWindow device buttons", () => {
 		fireEvent.pointerDown(selfView, { button: 0, pointerId: 7, clientX: 320, clientY: 330 });
 		fireEvent.pointerMove(selfView, { pointerId: 7, clientX: 920, clientY: 930 });
 
-		expect(selfView).toHaveStyle({ transform: "translate3d(282px, 168px, 0)" });
+		expect(selfView).toHaveStyle({ transform: "translate3d(290px, 176px, 0)" });
 		expect(selfView).toHaveAttribute("data-dragging", "true");
 
 		fireEvent.pointerUp(selfView, { pointerId: 7 });
@@ -1053,6 +1066,10 @@ describe("LaunchWindow device buttons", () => {
 
 		fireEvent.doubleClick(selfView);
 		expect(selfView.style.transform).toBe("");
+
+		fireEvent.pointerDown(selfView, { button: 0, pointerId: 8, clientX: 320, clientY: 330 });
+		fireEvent.pointerMove(selfView, { pointerId: 8, clientX: -1000, clientY: -1000 });
+		expect(selfView).toHaveStyle({ transform: "translate3d(-290px, -300px, 0)" });
 	});
 
 	it("keeps the self-view visible while recording", async () => {

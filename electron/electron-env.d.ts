@@ -420,6 +420,9 @@ interface Window {
 		dragHudOverlayTo: (deltaX: number, deltaY: number) => void;
 		endHudOverlayDrag: () => void;
 		setHudOverlaySize: (width: number, height: number) => void;
+		/** Expands the transparent HUD surface to its display so floating camera UI
+		 *  can reach every usable corner; false restores the compact HUD bounds. */
+		setHudOverlayExpanded: (expanded: boolean) => void;
 		showCountdownOverlay: (value: number, runId: number) => Promise<void>;
 		setCountdownOverlayValue: (value: number, runId: number) => Promise<void>;
 		hideCountdownOverlay: (runId: number) => Promise<void>;

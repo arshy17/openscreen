@@ -91,6 +91,8 @@ const ASSET_BASE_DIR = process.defaultApp
 export const ASSET_BASE_URL_ARG = `--asset-base-url=${pathToFileURL(`${ASSET_BASE_DIR}${path.sep}`).toString()}`;
 
 let hudOverlayWindow: BrowserWindow | null = null;
+let hudOverlayCompactBounds: Electron.Rectangle | null = null;
+let hudOverlayExpanded = false;
 
 // Origin the current drag gesture started from. The renderer sends the pointer's
 // *total* travel since pointerdown rather than per-frame deltas, so every move is
@@ -102,6 +104,27 @@ ipcMain.on("hud-overlay-hide", () => {
 	if (hudOverlayWindow && !hudOverlayWindow.isDestroyed()) {
 		hudOverlayWindow.minimize();
 	}
+});
+
+ipcMain.on("hud-overlay-set-expanded", (_event, expanded: boolean) => {
+	const win = hudOverlayWindow;
+	if (!win || win.isDestroyed() || expanded === hudOverlayExpanded) return;
+
+	if (expanded) {
+		const compactBounds = win.getBounds();
+		hudOverlayCompactBounds = compactBounds;
+		hudOverlayExpanded = true;
+		// The renderer keeps transparent pixels click-through, so using the whole
+		// work area does not block the desktop. It only gives independently dragged
+		// surfaces (the webcam self-view) coordinates all the way to each corner.
+		win.setBounds(screen.getDisplayMatching(compactBounds).workArea);
+		return;
+	}
+
+	hudOverlayExpanded = false;
+	const compactBounds = hudOverlayCompactBounds;
+	hudOverlayCompactBounds = null;
+	if (compactBounds) win.setBounds(compactBounds);
 });
 
 // The cursor, sampled here and pushed to the renderer, because while the HUD is
@@ -187,6 +210,14 @@ ipcMain.on("hud-overlay-drag-start", () => {
 	// resolves against 0 rather than the window's real position, and setPosition() is
 	// itself a no-op — so dragging cannot work on Wayland by this route at all. The
 	// finiteness check only keeps a garbage origin from reaching a native setter.
+	// Moving a work-area-sized transparent surface would pull both the HUD and an
+	// independently positioned camera away from the display. Keep that surface
+	// pinned while the self-view is active; camera dragging remains independent.
+	if (hudOverlayExpanded) {
+		hudDragOrigin = null;
+		return;
+	}
+
 	const [x, y] = hudOverlayWindow.getPosition();
 	hudDragOrigin = Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
 });
@@ -244,7 +275,10 @@ ipcMain.on("hud-overlay-set-size", (_event, width: number, height: number) => {
 		return;
 	}
 
-	const bounds = hudOverlayWindow.getBounds();
+	const bounds =
+		hudOverlayExpanded && hudOverlayCompactBounds
+			? hudOverlayCompactBounds
+			: hudOverlayWindow.getBounds();
 
 	// Clamp to the work area of the display the HUD sits on; on a short screen the
 	// vertical layout can exceed the display, where the bar's own overflow scroll takes over.
@@ -275,12 +309,17 @@ ipcMain.on("hud-overlay-set-size", (_event, width: number, height: number) => {
 		workArea.y + workArea.height - nextHeight,
 	);
 
-	hudOverlayWindow.setBounds({
+	const nextBounds = {
 		x: nextX,
 		y: nextY,
 		width: nextWidth,
 		height: nextHeight,
-	});
+	};
+	if (hudOverlayExpanded) {
+		hudOverlayCompactBounds = nextBounds;
+	} else {
+		hudOverlayWindow.setBounds(nextBounds);
+	}
 });
 
 /**
@@ -366,6 +405,8 @@ export function createHudOverlayWindow(): BrowserWindow {
 		if (hudOverlayWindow === win) {
 			hudOverlayWindow = null;
 			hudDragOrigin = null;
+			hudOverlayCompactBounds = null;
+			hudOverlayExpanded = false;
 			stopHudCursorPoll();
 		}
 	});

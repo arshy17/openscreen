@@ -6,7 +6,10 @@ export interface HudWebcamOffset {
 	y: number;
 }
 
-const VIEWPORT_MARGIN = 8;
+// Let the card sit flush with the usable display edge. The native HUD window
+// expands to the display work area while this view is enabled, so zero here is
+// the actual corner of that surface rather than the edge of the compact HUD.
+const VIEWPORT_MARGIN = 0;
 
 function clampPosition(position: HudWebcamOffset, width: number, height: number): HudWebcamOffset {
 	return {

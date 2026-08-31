@@ -912,6 +912,11 @@ export function LaunchWindow() {
 	const hasNotices = Boolean(systemLocaleSuggestion) || softwareEncoderFallbackNoticeVisible;
 	const showWebcamSelfView = webcamEnabled && !isDeviceSettingsOpen;
 
+	useEffect(() => {
+		window.electronAPI?.setHudOverlayExpanded?.(webcamEnabled);
+		return () => window.electronAPI?.setHudOverlayExpanded?.(false);
+	}, [webcamEnabled]);
+
 	return (
 		// Avoid w-screen/h-screen: 100vw can exceed the inner layout width when scrollbars
 		// affect the viewport (Windows), causing a horizontal scrollbar (issue #305).
