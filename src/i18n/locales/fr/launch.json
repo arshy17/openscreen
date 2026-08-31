@@ -94,6 +94,15 @@
 		"previewUnavailable": "Aperçu indisponible",
 		"about": "À propos",
 		"version": "Version {{version}}",
-		"checkingForUpdates": "Recherche…"
+		"checkingForUpdates": "Recherche…",
+		"appearance": "Apparence de la webcam",
+		"brightness": "Luminosité",
+		"size": "Taille de l’aperçu",
+		"shape": "Forme",
+		"shapeRectangle": "Rectangle",
+		"shapeRounded": "Arrondi",
+		"shapeCircle": "Cercle",
+		"shapeSquare": "Carré",
+		"resetAppearance": "Réinitialiser"
 	}
 }

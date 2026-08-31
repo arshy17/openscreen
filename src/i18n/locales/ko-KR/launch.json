@@ -94,6 +94,15 @@
 		"previewUnavailable": "미리 보기를 사용할 수 없습니다",
 		"about": "정보",
 		"version": "버전 {{version}}",
-		"checkingForUpdates": "확인 중…"
+		"checkingForUpdates": "확인 중…",
+		"appearance": "웹캠 모양",
+		"brightness": "밝기",
+		"size": "미리보기 크기",
+		"shape": "모양",
+		"shapeRectangle": "직사각형",
+		"shapeRounded": "둥근 모서리",
+		"shapeCircle": "원",
+		"shapeSquare": "정사각형",
+		"resetAppearance": "초기화"
 	}
 }

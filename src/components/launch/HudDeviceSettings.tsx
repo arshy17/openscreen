@@ -1,5 +1,6 @@
 import { Check, X } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
+import type { WebcamPreviewAppearance, WebcamPreviewShape } from "@/lib/userPreferences";
 import { useAudioLevelMeter } from "../../hooks/useAudioLevelMeter";
 import type { CameraDevice } from "../../hooks/useCameraDevices";
 import { useCameraPreviewStream } from "../../hooks/useCameraPreviewStream";
@@ -22,6 +23,15 @@ export interface HudDeviceSettingsLabels {
 	cameraUnavailable: string;
 	preview: string;
 	previewUnavailable: string;
+	appearance: string;
+	brightness: string;
+	size: string;
+	shape: string;
+	shapeRectangle: string;
+	shapeRounded: string;
+	shapeCircle: string;
+	shapeSquare: string;
+	resetAppearance: string;
 	about: string;
 	checkForUpdates: string;
 	checkingForUpdates: string;
@@ -46,10 +56,12 @@ function CameraPreview({
 	stream,
 	error,
 	unavailableLabel,
+	appearance,
 }: {
 	stream: MediaStream | null;
 	error: string | null;
 	unavailableLabel: string;
+	appearance: WebcamPreviewAppearance;
 }) {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -64,15 +76,48 @@ function CameraPreview({
 
 	if (error || !stream) {
 		return (
-			<div className={styles.cameraPreview}>
+			<div
+				className={styles.cameraPreview}
+				data-shape={appearance.shape}
+				style={{
+					width: appearance.shape === "circle" || appearance.shape === "square" ? "160px" : "100%",
+					aspectRatio:
+						appearance.shape === "circle" || appearance.shape === "square" ? "1 / 1" : "16 / 9",
+				}}
+			>
 				<span className={styles.cameraPreviewFallback}>{error ? unavailableLabel : ""}</span>
 			</div>
 		);
 	}
 
 	// No <track>: this is a live self-view with no audio and nothing to caption.
-	return <video ref={videoRef} className={styles.cameraPreview} autoPlay muted playsInline />;
+	return (
+		<video
+			ref={videoRef}
+			className={styles.cameraPreview}
+			data-shape={appearance.shape}
+			style={{
+				filter: `brightness(${appearance.brightness}%)`,
+				width: appearance.shape === "circle" || appearance.shape === "square" ? "160px" : "100%",
+				aspectRatio:
+					appearance.shape === "circle" || appearance.shape === "square" ? "1 / 1" : "16 / 9",
+			}}
+			autoPlay
+			muted
+			playsInline
+		/>
+	);
 }
+
+const APPEARANCE_SHAPES: Array<{
+	value: WebcamPreviewShape;
+	labelKey: keyof HudDeviceSettingsLabels;
+}> = [
+	{ value: "rectangle", labelKey: "shapeRectangle" },
+	{ value: "rounded", labelKey: "shapeRounded" },
+	{ value: "circle", labelKey: "shapeCircle" },
+	{ value: "square", labelKey: "shapeSquare" },
+];
 
 /**
  * Device selection *and* verification in one place.
@@ -97,6 +142,9 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 	checkingForUpdates,
 	onSelectMic,
 	onSelectCamera,
+	appearance,
+	onAppearanceChange,
+	onResetAppearance,
 	onCheckForUpdates,
 	onClose,
 	panelRef,
@@ -115,6 +163,9 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 	checkingForUpdates: boolean;
 	onSelectMic: (device: MicrophoneDevice) => void;
 	onSelectCamera: (device: CameraDevice) => void;
+	appearance: WebcamPreviewAppearance;
+	onAppearanceChange: (partial: Partial<WebcamPreviewAppearance>) => void;
+	onResetAppearance: () => void;
 	onCheckForUpdates: () => void;
 	onClose: () => void;
 	panelRef: (el: HTMLDivElement | null) => void;
@@ -214,9 +265,62 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 						stream={stream}
 						error={previewError}
 						unavailableLabel={labels.previewUnavailable}
+						appearance={appearance}
 					/>
 				</>
 			) : null}
+
+			<div className={styles.hudMenuSectionLabel}>{labels.appearance}</div>
+			<div className={styles.webcamAppearanceControl}>
+				<div className={styles.webcamAppearanceHeader}>
+					<label htmlFor="webcam-preview-brightness">{labels.brightness}</label>
+					<span>{Math.round(appearance.brightness)}%</span>
+				</div>
+				<input
+					id="webcam-preview-brightness"
+					type="range"
+					min={80}
+					max={140}
+					step={1}
+					value={appearance.brightness}
+					onChange={(event) => onAppearanceChange({ brightness: Number(event.target.value) })}
+				/>
+			</div>
+			<div className={styles.webcamAppearanceControl}>
+				<div className={styles.webcamAppearanceHeader}>
+					<label htmlFor="webcam-preview-size">{labels.size}</label>
+					<span>{Math.round(appearance.size)} px</span>
+				</div>
+				<input
+					id="webcam-preview-size"
+					type="range"
+					min={160}
+					max={320}
+					step={10}
+					value={appearance.size}
+					onChange={(event) => onAppearanceChange({ size: Number(event.target.value) })}
+				/>
+			</div>
+			<div className={styles.webcamAppearanceHeader}>
+				<span>{labels.shape}</span>
+				<button type="button" className={styles.webcamAppearanceReset} onClick={onResetAppearance}>
+					{labels.resetAppearance}
+				</button>
+			</div>
+			<div className={styles.webcamShapeGrid}>
+				{APPEARANCE_SHAPES.map((shape) => (
+					<button
+						type="button"
+						key={shape.value}
+						aria-pressed={appearance.shape === shape.value}
+						className={styles.webcamShapeButton}
+						onClick={() => onAppearanceChange({ shape: shape.value })}
+					>
+						<span data-preview-shape={shape.value} />
+						{labels[shape.labelKey]}
+					</button>
+				))}
+			</div>
 
 			{/* The HUD has no other settings surface, and an app the user cannot ask "which
 			    version am I running?" is an app whose bug reports arrive without one. The

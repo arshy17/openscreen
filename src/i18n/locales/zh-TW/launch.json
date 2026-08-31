@@ -94,6 +94,15 @@
 		"previewUnavailable": "預覽無法使用",
 		"about": "關於",
 		"version": "版本 {{version}}",
-		"checkingForUpdates": "檢查中…"
+		"checkingForUpdates": "檢查中…",
+		"appearance": "網路攝影機外觀",
+		"brightness": "亮度",
+		"size": "預覽大小",
+		"shape": "形狀",
+		"shapeRectangle": "矩形",
+		"shapeRounded": "圓角",
+		"shapeCircle": "圓形",
+		"shapeSquare": "正方形",
+		"resetAppearance": "重設"
 	}
 }

@@ -94,6 +94,15 @@
 		"previewUnavailable": "Không thể xem trước",
 		"about": "Giới thiệu",
 		"version": "Phiên bản {{version}}",
-		"checkingForUpdates": "Đang kiểm tra…"
+		"checkingForUpdates": "Đang kiểm tra…",
+		"appearance": "Giao diện webcam",
+		"brightness": "Độ sáng",
+		"size": "Kích thước xem trước",
+		"shape": "Hình dạng",
+		"shapeRectangle": "Chữ nhật",
+		"shapeRounded": "Bo tròn",
+		"shapeCircle": "Tròn",
+		"shapeSquare": "Vuông",
+		"resetAppearance": "Đặt lại"
 	}
 }

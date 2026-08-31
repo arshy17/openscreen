@@ -284,6 +284,22 @@
 	transform: scaleX(-1);
 }
 
+.cameraPreview[data-shape="rectangle"] {
+	border-radius: 6px;
+}
+
+.cameraPreview[data-shape="rounded"] {
+	border-radius: 22px;
+}
+
+.cameraPreview[data-shape="circle"] {
+	border-radius: 50%;
+}
+
+.cameraPreview[data-shape="square"] {
+	border-radius: 12px;
+}
+
 .cameraPreviewFallback {
 	font-size: 11px;
 	font-style: italic;
@@ -315,6 +331,22 @@
 
 .hudWebcamSelfView[data-dragging="true"] {
 	cursor: grabbing;
+}
+
+.hudWebcamSelfView[data-shape="rectangle"] {
+	border-radius: 8px;
+}
+
+.hudWebcamSelfView[data-shape="rounded"] {
+	border-radius: 28px;
+}
+
+.hudWebcamSelfView[data-shape="circle"] {
+	border-radius: 50%;
+}
+
+.hudWebcamSelfView[data-shape="square"] {
+	border-radius: 14px;
 }
 
 .hudWebcamSelfViewVideo {
@@ -361,6 +393,94 @@
 .hudWebcamSelfView:hover .hudWebcamDragAffordance,
 .hudWebcamSelfView[data-dragging="true"] .hudWebcamDragAffordance {
 	opacity: 1;
+}
+
+.webcamAppearanceControl {
+	padding: 4px 10px 7px;
+}
+
+.webcamAppearanceControl input[type="range"] {
+	width: 100%;
+	accent-color: #34d399;
+}
+
+.webcamAppearanceHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 3px 10px;
+	font-size: 10px;
+	color: rgba(255, 255, 255, 0.55);
+}
+
+.webcamAppearanceHeader span:last-child {
+	font-family: var(--font-mono, ui-monospace, monospace);
+	color: rgba(255, 255, 255, 0.72);
+}
+
+.webcamAppearanceReset {
+	border: 0;
+	padding: 2px 0;
+	background: transparent;
+	font-size: 10px;
+	color: #6ee7b7;
+	cursor: pointer;
+}
+
+.webcamShapeGrid {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 6px;
+	padding: 4px 10px 8px;
+}
+
+.webcamShapeButton {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	align-items: center;
+	gap: 5px;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 9px;
+	padding: 7px 3px;
+	background: rgba(255, 255, 255, 0.035);
+	font-size: 9px;
+	color: rgba(255, 255, 255, 0.55);
+	cursor: pointer;
+}
+
+.webcamShapeButton[aria-pressed="true"] {
+	border-color: rgba(52, 211, 153, 0.65);
+	background: rgba(52, 211, 153, 0.12);
+	color: #d1fae5;
+}
+
+.webcamShapeButton > span {
+	display: block;
+	width: 23px;
+	height: 16px;
+	border: 1.5px solid currentColor;
+}
+
+.webcamShapeButton > span[data-preview-shape="rectangle"] {
+	border-radius: 2px;
+}
+
+.webcamShapeButton > span[data-preview-shape="rounded"] {
+	border-radius: 6px;
+}
+
+.webcamShapeButton > span[data-preview-shape="circle"] {
+	width: 17px;
+	height: 17px;
+	border-radius: 50%;
+}
+
+.webcamShapeButton > span[data-preview-shape="square"] {
+	width: 17px;
+	height: 17px;
+	border-radius: 3px;
 }
 
 /* Fixed width (not `100vw - 1rem`) for the same no-viewport-dependency reason. */

@@ -94,6 +94,15 @@
 		"previewUnavailable": "Vista previa no disponible",
 		"about": "Acerca de",
 		"version": "Versión {{version}}",
-		"checkingForUpdates": "Buscando…"
+		"checkingForUpdates": "Buscando…",
+		"appearance": "Apariencia de la cámara",
+		"brightness": "Brillo",
+		"size": "Tamaño de vista",
+		"shape": "Forma",
+		"shapeRectangle": "Rectángulo",
+		"shapeRounded": "Redondeado",
+		"shapeCircle": "Círculo",
+		"shapeSquare": "Cuadrado",
+		"resetAppearance": "Restablecer"
 	}
 }

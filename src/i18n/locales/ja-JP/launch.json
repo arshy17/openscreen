@@ -94,6 +94,15 @@
 		"previewUnavailable": "プレビューを利用できません",
 		"about": "情報",
 		"version": "バージョン {{version}}",
-		"checkingForUpdates": "確認中…"
+		"checkingForUpdates": "確認中…",
+		"appearance": "ウェブカメラの外観",
+		"brightness": "明るさ",
+		"size": "プレビューサイズ",
+		"shape": "形状",
+		"shapeRectangle": "長方形",
+		"shapeRounded": "角丸",
+		"shapeCircle": "円",
+		"shapeSquare": "正方形",
+		"resetAppearance": "リセット"
 	}
 }

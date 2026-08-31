@@ -164,6 +164,15 @@ vi.mock("@/contexts/I18nContext", () => ({
 			"deviceSettings.noMicrophones": "No microphone found",
 			"deviceSettings.preview": "Preview",
 			"deviceSettings.previewUnavailable": "Preview unavailable",
+			"deviceSettings.appearance": "Webcam appearance",
+			"deviceSettings.brightness": "Brightness",
+			"deviceSettings.size": "Self-view size",
+			"deviceSettings.shape": "Shape",
+			"deviceSettings.shapeRectangle": "Rectangle",
+			"deviceSettings.shapeRounded": "Rounded",
+			"deviceSettings.shapeCircle": "Circle",
+			"deviceSettings.shapeSquare": "Square",
+			"deviceSettings.resetAppearance": "Reset",
 			"deviceSettings.about": "About",
 			"deviceSettings.version": "Version {{version}}",
 			"actions.checkForUpdates": "Check for updates",
@@ -288,6 +297,7 @@ function emitSourceSelectorClosed() {
 
 function resetLaunchMocks() {
 	vi.stubGlobal("ResizeObserver", StubResizeObserver);
+	localStorage.clear();
 	recorderState.value.toggleRecording.mockClear();
 	recorderState.value.softwareEncoderFallbackNoticeVisible = false;
 	recorderState.value.dismissSoftwareEncoderFallbackNotice.mockClear();
@@ -1129,6 +1139,54 @@ describe("LaunchWindow device settings", () => {
 		// whole reason the picker moved out of the mic button.
 		expect(recorderState.value.setMicrophoneDeviceId).toHaveBeenCalledWith("mic-b");
 		expect(recorderState.value.setMicrophoneEnabled).not.toHaveBeenCalled();
+	});
+
+	it("previews, persists, and resets webcam appearance controls", async () => {
+		recorderState.value.webcamEnabled = true;
+		recorderState.value.webcamPreviewStream = {} as MediaStream;
+
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-device-settings-button"));
+		const panel = await screen.findByTestId("hud-device-settings");
+		const brightness = within(panel).getByLabelText("Brightness");
+		const size = within(panel).getByLabelText("Self-view size");
+
+		fireEvent.change(brightness, { target: { value: "125" } });
+		fireEvent.change(size, { target: { value: "300" } });
+		fireEvent.click(within(panel).getByRole("button", { name: "Circle" }));
+
+		expect(brightness).toHaveValue("125");
+		expect(size).toHaveValue("300");
+		expect(within(panel).getByRole("button", { name: "Circle" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
+
+		fireEvent.click(within(panel).getByRole("button", { name: "Done" }));
+
+		const selfView = await screen.findByTestId("hud-webcam-self-view");
+		expect(selfView).toHaveAttribute("data-shape", "circle");
+		expect(selfView).toHaveStyle({ width: "300px", aspectRatio: "1 / 1" });
+		expect(screen.getByTestId("hud-webcam-self-view-video")).toHaveStyle({
+			filter: "brightness(125%)",
+		});
+		expect(JSON.parse(localStorage.getItem("openscreen_user_preferences") ?? "{}")).toMatchObject({
+			webcamPreviewBrightness: 125,
+			webcamPreviewSize: 300,
+			webcamPreviewShape: "circle",
+		});
+
+		fireEvent.click(screen.getByTestId("launch-device-settings-button"));
+		const reopenedPanel = await screen.findByTestId("hud-device-settings");
+		fireEvent.click(within(reopenedPanel).getByRole("button", { name: "Reset" }));
+
+		expect(within(reopenedPanel).getByLabelText("Brightness")).toHaveValue("100");
+		expect(within(reopenedPanel).getByLabelText("Self-view size")).toHaveValue("220");
+		expect(within(reopenedPanel).getByRole("button", { name: "Rounded" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
 	});
 
 	// The gear is disabled while recording, but a panel that was already open stays mounted —

@@ -94,6 +94,15 @@
 		"previewUnavailable": "Preview unavailable",
 		"about": "About",
 		"version": "Version {{version}}",
-		"checkingForUpdates": "Checking…"
+		"checkingForUpdates": "Checking…",
+		"appearance": "Webcam appearance",
+		"brightness": "Brightness",
+		"size": "Self-view size",
+		"shape": "Shape",
+		"shapeRectangle": "Rectangle",
+		"shapeRounded": "Rounded",
+		"shapeCircle": "Circle",
+		"shapeSquare": "Square",
+		"resetAppearance": "Reset"
 	}
 }

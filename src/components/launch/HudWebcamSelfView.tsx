@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import type { WebcamPreviewAppearance } from "@/lib/userPreferences";
 import styles from "./LaunchWindow.module.css";
 
 export interface HudWebcamOffset {
@@ -31,6 +32,7 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 	searchingLabel,
 	position,
 	onPositionChange,
+	appearance,
 }: {
 	stream: MediaStream | null;
 	recording: boolean;
@@ -38,6 +40,7 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 	searchingLabel: string;
 	position: HudWebcamOffset | null;
 	onPositionChange: (position: HudWebcamOffset | null) => void;
+	appearance: WebcamPreviewAppearance;
 }) {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const selfViewRef = useRef<HTMLDivElement | null>(null);
@@ -141,10 +144,14 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 			data-recording={recording ? "true" : "false"}
 			data-dragging={dragging ? "true" : "false"}
 			data-hud-interactive="true"
+			data-shape={appearance.shape}
 			className={styles.hudWebcamSelfView}
-			style={
-				position ? { transform: `translate3d(${position.x}px, ${position.y}px, 0)` } : undefined
-			}
+			style={{
+				width: `${appearance.size}px`,
+				aspectRatio:
+					appearance.shape === "circle" || appearance.shape === "square" ? "1 / 1" : "16 / 9",
+				...(position ? { transform: `translate3d(${position.x}px, ${position.y}px, 0)` } : null),
+			}}
 			aria-label={previewLabel}
 			title={`${previewLabel} — drag to move`}
 			onPointerDown={handlePointerDown}
@@ -159,6 +166,7 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 					ref={videoRef}
 					data-testid="hud-webcam-self-view-video"
 					className={styles.hudWebcamSelfViewVideo}
+					style={{ filter: `brightness(${appearance.brightness}%)` }}
 					autoPlay
 					muted
 					playsInline

@@ -94,6 +94,15 @@
 		"previewUnavailable": "المعاينة غير متاحة",
 		"about": "حول",
 		"version": "الإصدار {{version}}",
-		"checkingForUpdates": "جارٍ التحقق…"
+		"checkingForUpdates": "جارٍ التحقق…",
+		"appearance": "مظهر كاميرا الويب",
+		"brightness": "السطوع",
+		"size": "حجم المعاينة",
+		"shape": "الشكل",
+		"shapeRectangle": "مستطيل",
+		"shapeRounded": "مستدير",
+		"shapeCircle": "دائرة",
+		"shapeSquare": "مربع",
+		"resetAppearance": "إعادة ضبط"
 	}
 }

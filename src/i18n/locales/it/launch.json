@@ -94,6 +94,15 @@
 		"previewUnavailable": "Anteprima non disponibile",
 		"about": "Info",
 		"version": "Versione {{version}}",
-		"checkingForUpdates": "Controllo…"
+		"checkingForUpdates": "Controllo…",
+		"appearance": "Aspetto webcam",
+		"brightness": "Luminosità",
+		"size": "Dimensione anteprima",
+		"shape": "Forma",
+		"shapeRectangle": "Rettangolo",
+		"shapeRounded": "Arrotondato",
+		"shapeCircle": "Cerchio",
+		"shapeSquare": "Quadrato",
+		"resetAppearance": "Ripristina"
 	}
 }

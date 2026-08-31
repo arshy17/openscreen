@@ -7,6 +7,14 @@ import { type AspectRatio, isAspectRatio } from "@/utils/aspectRatioUtils";
 
 const PREFS_KEY = "openscreen_user_preferences";
 
+export type WebcamPreviewShape = "rectangle" | "rounded" | "circle" | "square";
+
+export interface WebcamPreviewAppearance {
+	brightness: number;
+	size: number;
+	shape: WebcamPreviewShape;
+}
+
 export interface UserPreferences {
 	/** Default padding % */
 	padding: number;
@@ -22,6 +30,12 @@ export interface UserPreferences {
 	projectFolder: string | null;
 	/** Recording HUD control layout */
 	trayLayout: "horizontal" | "vertical";
+	/** Non-destructive live webcam self-view brightness, as a percentage. */
+	webcamPreviewBrightness: number;
+	/** Width of the floating live webcam self-view in CSS pixels. */
+	webcamPreviewSize: number;
+	/** Mask used by the floating live webcam self-view. */
+	webcamPreviewShape: WebcamPreviewShape;
 	/** Force the Windows native recorder to use the software H.264 encoder */
 	preferSoftwareEncoder: boolean;
 	/** Stop showing the notice that recording fell back to software encoding */
@@ -36,6 +50,9 @@ export const DEFAULT_PREFS: UserPreferences = {
 	exportFolder: null,
 	projectFolder: null,
 	trayLayout: "horizontal",
+	webcamPreviewBrightness: 100,
+	webcamPreviewSize: 220,
+	webcamPreviewShape: "rounded",
 	preferSoftwareEncoder: false,
 	hideSoftwareEncoderFallbackNotice: false,
 };
@@ -91,6 +108,27 @@ export function loadUserPreferences(): UserPreferences {
 			raw.trayLayout === "horizontal" || raw.trayLayout === "vertical"
 				? raw.trayLayout
 				: DEFAULT_PREFS.trayLayout,
+		webcamPreviewBrightness:
+			typeof raw.webcamPreviewBrightness === "number" &&
+			Number.isFinite(raw.webcamPreviewBrightness) &&
+			raw.webcamPreviewBrightness >= 80 &&
+			raw.webcamPreviewBrightness <= 140
+				? raw.webcamPreviewBrightness
+				: DEFAULT_PREFS.webcamPreviewBrightness,
+		webcamPreviewSize:
+			typeof raw.webcamPreviewSize === "number" &&
+			Number.isFinite(raw.webcamPreviewSize) &&
+			raw.webcamPreviewSize >= 160 &&
+			raw.webcamPreviewSize <= 320
+				? raw.webcamPreviewSize
+				: DEFAULT_PREFS.webcamPreviewSize,
+		webcamPreviewShape:
+			raw.webcamPreviewShape === "rectangle" ||
+			raw.webcamPreviewShape === "rounded" ||
+			raw.webcamPreviewShape === "circle" ||
+			raw.webcamPreviewShape === "square"
+				? raw.webcamPreviewShape
+				: DEFAULT_PREFS.webcamPreviewShape,
 		preferSoftwareEncoder:
 			typeof raw.preferSoftwareEncoder === "boolean"
 				? raw.preferSoftwareEncoder

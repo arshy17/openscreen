@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { getAvailableLocales, getLocaleName } from "@/i18n/loader";
-import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
+import {
+	DEFAULT_PREFS,
+	loadUserPreferences,
+	saveUserPreferences,
+	type WebcamPreviewAppearance,
+} from "@/lib/userPreferences";
 import { nativeBridgeClient } from "@/native";
 import { type CameraDevice, useCameraDevices } from "../../hooks/useCameraDevices";
 import { type MicrophoneDevice, useMicrophoneDevices } from "../../hooks/useMicrophoneDevices";
@@ -121,6 +126,16 @@ export function LaunchWindow() {
 	const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
 	const [trayLayout, setTrayLayout] = useState<"horizontal" | "vertical">(
 		() => loadUserPreferences().trayLayout,
+	);
+	const [webcamPreviewAppearance, setWebcamPreviewAppearance] = useState<WebcamPreviewAppearance>(
+		() => {
+			const prefs = loadUserPreferences();
+			return {
+				brightness: prefs.webcamPreviewBrightness,
+				size: prefs.webcamPreviewSize,
+				shape: prefs.webcamPreviewShape,
+			};
+		},
 	);
 	const [supportsCursorModeToggle, setSupportsCursorModeToggle] = useState(false);
 	const [isLinuxHud, setIsLinuxHud] = useState(false);
@@ -762,6 +777,26 @@ export function LaunchWindow() {
 		[persistRecordingPrefs, setSelectedCameraId, setWebcamDeviceId, setWebcamDeviceName],
 	);
 
+	const handleWebcamAppearanceChange = useCallback((partial: Partial<WebcamPreviewAppearance>) => {
+		setWebcamPreviewAppearance((current) => {
+			const next = { ...current, ...partial };
+			saveUserPreferences({
+				webcamPreviewBrightness: next.brightness,
+				webcamPreviewSize: next.size,
+				webcamPreviewShape: next.shape,
+			});
+			return next;
+		});
+	}, []);
+
+	const resetWebcamAppearance = useCallback(() => {
+		handleWebcamAppearanceChange({
+			brightness: DEFAULT_PREFS.webcamPreviewBrightness,
+			size: DEFAULT_PREFS.webcamPreviewSize,
+			shape: DEFAULT_PREFS.webcamPreviewShape,
+		});
+	}, [handleWebcamAppearanceChange]);
+
 	const toggleDeviceSettings = useCallback(() => {
 		if (controlsLocked) return;
 		setIsLanguageMenuOpen(false);
@@ -900,6 +935,15 @@ export function LaunchWindow() {
 			cameraUnavailable: t("webcam.unavailable"),
 			preview: t("deviceSettings.preview"),
 			previewUnavailable: t("deviceSettings.previewUnavailable"),
+			appearance: t("deviceSettings.appearance"),
+			brightness: t("deviceSettings.brightness"),
+			size: t("deviceSettings.size"),
+			shape: t("deviceSettings.shape"),
+			shapeRectangle: t("deviceSettings.shapeRectangle"),
+			shapeRounded: t("deviceSettings.shapeRounded"),
+			shapeCircle: t("deviceSettings.shapeCircle"),
+			shapeSquare: t("deviceSettings.shapeSquare"),
+			resetAppearance: t("deviceSettings.resetAppearance"),
 			about: t("deviceSettings.about"),
 			checkForUpdates: tCommon("actions.checkForUpdates"),
 			checkingForUpdates: t("deviceSettings.checkingForUpdates"),
@@ -1110,6 +1154,7 @@ export function LaunchWindow() {
 								searchingLabel={deviceSettingsLabels.searching}
 								position={webcamSelfViewOffset}
 								onPositionChange={setWebcamSelfViewOffset}
+								appearance={webcamPreviewAppearance}
 							/>
 						)}
 
@@ -1131,6 +1176,9 @@ export function LaunchWindow() {
 								checkingForUpdates={isCheckingForUpdates}
 								onSelectMic={handleSelectMicDevice}
 								onSelectCamera={handleSelectCameraDevice}
+								appearance={webcamPreviewAppearance}
+								onAppearanceChange={handleWebcamAppearanceChange}
+								onResetAppearance={resetWebcamAppearance}
 								onCheckForUpdates={handleCheckForUpdates}
 								onClose={closeDeviceSettings}
 								panelRef={setPopoverEl}

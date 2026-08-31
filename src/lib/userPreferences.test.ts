@@ -133,4 +133,35 @@ describe("user preferences", () => {
 
 		expect(loadUserPreferences().hideSoftwareEncoderFallbackNotice).toBe(false);
 	});
+
+	it("persists webcam preview appearance preferences", () => {
+		saveUserPreferences({
+			webcamPreviewBrightness: 125,
+			webcamPreviewSize: 300,
+			webcamPreviewShape: "circle",
+		});
+
+		expect(loadUserPreferences()).toMatchObject({
+			webcamPreviewBrightness: 125,
+			webcamPreviewSize: 300,
+			webcamPreviewShape: "circle",
+		});
+	});
+
+	it("falls back to safe webcam preview defaults for invalid appearance values", () => {
+		localStorage.setItem(
+			"openscreen_user_preferences",
+			JSON.stringify({
+				webcamPreviewBrightness: 500,
+				webcamPreviewSize: 20,
+				webcamPreviewShape: "star",
+			}),
+		);
+
+		expect(loadUserPreferences()).toMatchObject({
+			webcamPreviewBrightness: DEFAULT_PREFS.webcamPreviewBrightness,
+			webcamPreviewSize: DEFAULT_PREFS.webcamPreviewSize,
+			webcamPreviewShape: DEFAULT_PREFS.webcamPreviewShape,
+		});
+	});
 });

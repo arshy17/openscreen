@@ -94,6 +94,15 @@
 		"previewUnavailable": "Önizleme kullanılamıyor",
 		"about": "Hakkında",
 		"version": "Sürüm {{version}}",
-		"checkingForUpdates": "Denetleniyor…"
+		"checkingForUpdates": "Denetleniyor…",
+		"appearance": "Web kamerası görünümü",
+		"brightness": "Parlaklık",
+		"size": "Önizleme boyutu",
+		"shape": "Şekil",
+		"shapeRectangle": "Dikdörtgen",
+		"shapeRounded": "Yuvarlatılmış",
+		"shapeCircle": "Daire",
+		"shapeSquare": "Kare",
+		"resetAppearance": "Sıfırla"
 	}
 }

@@ -94,6 +94,15 @@
 		"previewUnavailable": "预览不可用",
 		"about": "关于",
 		"version": "版本 {{version}}",
-		"checkingForUpdates": "正在检查…"
+		"checkingForUpdates": "正在检查…",
+		"appearance": "摄像头外观",
+		"brightness": "亮度",
+		"size": "预览大小",
+		"shape": "形状",
+		"shapeRectangle": "矩形",
+		"shapeRounded": "圆角",
+		"shapeCircle": "圆形",
+		"shapeSquare": "正方形",
+		"resetAppearance": "重置"
 	}
 }

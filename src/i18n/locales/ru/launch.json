@@ -94,6 +94,15 @@
 		"previewUnavailable": "Предпросмотр недоступен",
 		"about": "О программе",
 		"version": "Версия {{version}}",
-		"checkingForUpdates": "Проверка…"
+		"checkingForUpdates": "Проверка…",
+		"appearance": "Внешний вид камеры",
+		"brightness": "Яркость",
+		"size": "Размер предпросмотра",
+		"shape": "Форма",
+		"shapeRectangle": "Прямоугольник",
+		"shapeRounded": "Скруглённый",
+		"shapeCircle": "Круг",
+		"shapeSquare": "Квадрат",
+		"resetAppearance": "Сбросить"
 	}
 }
