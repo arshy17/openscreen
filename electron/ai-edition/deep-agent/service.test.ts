@@ -361,8 +361,8 @@ describe("one description of the tools, not two", () => {
 describe("what the descriptions say about zoom strength", () => {
 	it("carries the real depth table and not the formula that never matched it", () => {
 		// "depth 1–6 maps to 1.0×–3.5×" was `depth/2 + 0.5`, wrong at both ends of a
-		// table running 1.25×–5.0×, and it told the model depth 3 was ~2.0× while
-		// the pill on screen read 1.80×.
+		// table running 1.25×–5.0×. The table itself is the contract now, including
+		// today's 2.00× default at depth 3.
 		for (const text of [TOOL_DESCRIPTIONS.addZoom, TOOL_DESCRIPTIONS.setZoom, SYSTEM_PROMPT]) {
 			expect(text).not.toMatch(/1\.0×–3\.5×|1\.0x-3\.5x/);
 		}

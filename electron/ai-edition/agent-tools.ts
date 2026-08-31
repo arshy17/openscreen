@@ -756,7 +756,7 @@ function captionPreset(
 //     reported it done. `hasCameraTrack` is the exact parity of `hasTranscript`
 //     below, which had already solved the same problem for the transcript.
 //   • the zoom's real strength — `depth` went out bare. It is an ORDINAL, so a
-//     reader turns "3" into "3×" while the frame renders 1.80×; and when a
+//     reader turns "3" into "3×" while the frame renders 2.00×; and when a
 //     migrated v1.7 project carries `customScale`, `depth` is inert and nothing
 //     said so. `renderedScale` is `effectiveZoomScale`, the renderer's own
 //     function, so the number the model reports is the number the viewer sees.
@@ -1625,7 +1625,7 @@ export function executeAgentTool(
 					zoomId: landing.ids[0],
 					depth: zoom.depth,
 					// The depth alone is an ordinal; reported on its own it is what the
-					// model turns into "3×" for a frame that renders 1.80×.
+					// model turns into "3×" for a frame that renders 2.00×.
 					renderedScale: effectiveZoomScale(zoom),
 					...landingReport(landing, startMs / 1000, endMs / 1000),
 					...(anchor ? { cursorAnchor: anchor } : {}),

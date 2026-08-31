@@ -15,16 +15,16 @@ import {
 describe("effectiveZoomScale", () => {
 	it("maps each depth to the table, which is not depth/2 + 0.5", () => {
 		expect(effectiveZoomScale({ depth: 1 })).toBe(1.25);
-		expect(effectiveZoomScale({ depth: 3 })).toBe(1.8);
+		expect(effectiveZoomScale({ depth: 3 })).toBe(2.0);
 		expect(effectiveZoomScale({ depth: 6 })).toBe(5.0);
 		// The formula the agent's descriptions advertised for a release. It agrees
-		// with the table at depth 2 and nowhere else — which is why "depth 3 ≈ 2.0×"
-		// read plausibly while the pill showed 1.80×.
+		// with the table at depths 2 and 3. The remaining preset values deliberately
+		// stay non-linear.
 		const claimed = (depth: number) => depth / 2 + 0.5;
 		const agreeing = ([1, 2, 3, 4, 5, 6] as const).filter(
 			(d) => Math.abs(claimed(d) - ZOOM_DEPTH_SCALES[d]) < 0.001,
 		);
-		expect(agreeing).toEqual([2]);
+		expect(agreeing).toEqual([2, 3]);
 	});
 
 	it("prefers customScale over the depth", () => {
@@ -57,7 +57,7 @@ describe("effectiveZoomScale", () => {
 
 describe("ZOOM_DEPTH_LEGEND", () => {
 	it("is derived from the table, in depth order", () => {
-		expect(ZOOM_DEPTH_LEGEND).toBe("1=1.25×, 2=1.50×, 3=1.80×, 4=2.20×, 5=3.50×, 6=5.00×");
+		expect(ZOOM_DEPTH_LEGEND).toBe("1=1.25×, 2=1.50×, 3=2.00×, 4=2.20×, 5=3.50×, 6=5.00×");
 		for (const depth of [1, 2, 3, 4, 5, 6] as const) {
 			expect(ZOOM_DEPTH_LEGEND).toContain(`${depth}=${ZOOM_DEPTH_SCALES[depth].toFixed(2)}×`);
 		}

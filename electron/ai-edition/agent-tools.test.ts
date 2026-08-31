@@ -1077,13 +1077,13 @@ describe("documentSnapshotForModel", () => {
 		// Both assertions on purpose: the literal is what the pill on screen reads,
 		// and the table cross-check makes this fail if someone edits the mapping
 		// without meaning to. The prompt used to promise ~2.0× for this zoom.
-		expect(snapshot.zoomRanges[0].renderedScale).toBe(1.8);
+		expect(snapshot.zoomRanges[0].renderedScale).toBe(2.0);
 		expect(snapshot.zoomRanges[0].renderedScale).toBe(ZOOM_DEPTH_SCALES[3]);
 		expect(snapshot.zoomRanges[0].depth).toBe(3);
 		expect(snapshot.zoomRanges[0].depthIsOverridden).toBeUndefined();
 		expect(snapshot.zoomRanges[0].focusMode).toBe("manual");
 		expect(snapshot.zoomRanges[0].source).toBe("manual");
-		expect(snapshot.zoomNote).toMatch(/3=1\.80×/);
+		expect(snapshot.zoomNote).toMatch(/3=2\.00×/);
 	});
 
 	it("flags a customScale that makes the depth inert", () => {
@@ -1151,8 +1151,8 @@ describe("zoom strength is written, not just stored", () => {
 			JSON.stringify({ startSec: 2, endSec: 6, depth: 3 }),
 		);
 		expect(result.ok).toBe(true);
-		expect(JSON.parse(result.resultJson).renderedScale).toBe(1.8);
-		expect(result.summary).toContain("1.80×");
+		expect(JSON.parse(result.resultJson).renderedScale).toBe(2.0);
+		expect(result.summary).toContain("2.00×");
 	});
 
 	it("setZoom{depth} on a customScale zoom clears the override instead of no-op'ing", () => {

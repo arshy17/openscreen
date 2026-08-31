@@ -811,7 +811,8 @@ export function buildSceneDescription(
 			startSec: region.startMs / 1000,
 			endSec: region.endMs / 1000,
 			// `ZOOM_DEPTH_SCALES` et rien d'autre. Cette ligne portait sa propre formule,
-			// `depth / 2 + 0.5`, qui ne coïncide avec la table qu'à la profondeur 2 — et le focus,
+			// `depth / 2 + 0.5`, qui, dans la table de l'époque, ne coïncidait qu'à la profondeur
+			// 2 — et le focus,
 			// lui, est borné avec la table (`getFocusBoundsForScale`, via `getZoomScale`). Les deux
 			// échelles se contredisaient donc : à la profondeur 3 le gimbal butait à 1/(2×1.8) =
 			// 0.2778 pendant que le compositeur découpait une demi-fenêtre de 1/(2×2.0) = 0.25, si

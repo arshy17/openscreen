@@ -15,15 +15,16 @@
 // `depth/2 + 0.5`), the compositor's scene description carried that same
 // formula until it was corrected, and the pill on screen has always read the
 // table below. Wrong at both ends: the range is 1.25×–5.0×, it is not linear,
-// and the default depth 3 renders at 1.80× — not the "2.0×" the agent was told
-// to report, and certainly not the "3×" a model reads off a bare ordinal.
+// and the default depth 3 renders at 2.00× — not the "3×" a model reads off a
+// bare ordinal. Keep the user-facing value here so automatic and manual zooms,
+// native preview, export, timeline labels, and AI tool descriptions stay aligned.
 
 export type ZoomDepth = 1 | 2 | 3 | 4 | 5 | 6;
 
 export const ZOOM_DEPTH_SCALES: Record<ZoomDepth, number> = {
 	1: 1.25,
 	2: 1.5,
-	3: 1.8,
+	3: 2.0,
 	4: 2.2,
 	5: 3.5,
 	6: 5.0,

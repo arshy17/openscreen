@@ -604,7 +604,7 @@ describe("buildSceneDescription.zoomRegions with an earlier trim", () => {
 				id: "z",
 				startSec: 6,
 				endSec: 8,
-				// profondeur 3 = 1.8 dans `ZOOM_DEPTH_SCALES` ; ce test portait sur la ventilation
+				// profondeur 3 = 2.0 dans `ZOOM_DEPTH_SCALES` ; ce test portait sur la ventilation
 				// du zoom après un trim, pas sur l'échelle, mais il en fixait la valeur au passage.
 				scale: ZOOM_DEPTH_SCALES[3],
 				focusX: 0.5,

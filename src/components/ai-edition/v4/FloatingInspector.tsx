@@ -531,7 +531,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 							{ZOOM_DEPTHS.map((d) => (
 								<option key={d} value={d}>
 									{/* La table, pas une formule : ce libellé annonçait « 2.0× » là où la pastille de la
-									    timeline affiche « 1.80× » et où le rendu applique 1.8. */}
+									    timeline affiche « 2.00× » et où le rendu applique 2.0. */}
 									{ZOOM_DEPTH_SCALES[d]}×
 								</option>
 							))}

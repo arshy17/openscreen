@@ -231,8 +231,12 @@ export interface CursorVisualSettings {
 }
 
 export const DEFAULT_CURSOR_SIZE = 3.0;
-export const DEFAULT_CURSOR_SMOOTHING = 0.67;
-export const DEFAULT_CURSOR_MOTION_BLUR = 0.35;
+// Keep both effects subtle by default. High smoothing is a causal spring and
+// therefore follows behind the real pointer; high blur intentionally paints a
+// trail. Users can still raise either effect, but a fresh recording should feel
+// responsive before they touch the controls.
+export const DEFAULT_CURSOR_SMOOTHING = 0.15;
+export const DEFAULT_CURSOR_MOTION_BLUR = 0.1;
 export const DEFAULT_CURSOR_CLICK_BOUNCE = 2.5;
 // false lets the cursor overflow into the background; true clips it to the canvas bounds.
 export const DEFAULT_CURSOR_CLIP_TO_BOUNDS = false;

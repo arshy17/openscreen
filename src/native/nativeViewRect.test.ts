@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { computeDeviceRect, rectsEqual } from "./nativeViewRect";
+import {
+	computeDeviceRect,
+	computePreviewRect,
+	PREVIEW_MAX_HEIGHT,
+	PREVIEW_MAX_WIDTH,
+	rectsEqual,
+} from "./nativeViewRect";
 
 describe("computeDeviceRect", () => {
 	it("returns identity with Math.round at dpr=1", () => {
@@ -90,5 +96,42 @@ describe("rectsEqual", () => {
 		expect(
 			rectsEqual({ x: 0, y: 0, width: 0, height: 0 }, { x: 0, y: 0, width: 0, height: 0 }),
 		).toBe(true);
+	});
+});
+
+describe("computePreviewRect", () => {
+	it("does not multiply the raw preview buffer on a Retina display", () => {
+		expect(computePreviewRect({ left: 10, top: 20, width: 960, height: 540 }, 2)).toEqual({
+			x: 10,
+			y: 20,
+			width: 960,
+			height: 540,
+		});
+	});
+
+	it("caps a large preview proportionally without changing its aspect ratio", () => {
+		const rect = computePreviewRect({ left: 0, top: 0, width: 2560, height: 1440 }, 2);
+		expect(rect).toEqual({
+			x: 0,
+			y: 0,
+			width: PREVIEW_MAX_WIDTH,
+			height: PREVIEW_MAX_HEIGHT,
+		});
+		expect(rect.width / rect.height).toBeCloseTo(16 / 9, 5);
+	});
+
+	it("keeps low-density and zero-size previews valid", () => {
+		expect(computePreviewRect({ left: 2, top: 3, width: 320, height: 180 }, 0.75)).toEqual({
+			x: 2,
+			y: 2,
+			width: 240,
+			height: 135,
+		});
+		expect(computePreviewRect({ left: 0, top: 0, width: 0, height: 0 }, 2)).toEqual({
+			x: 0,
+			y: 0,
+			width: 0,
+			height: 0,
+		});
 	});
 });

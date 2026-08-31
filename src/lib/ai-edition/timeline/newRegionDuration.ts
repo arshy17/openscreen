@@ -24,7 +24,7 @@
  * On-screen width a freshly created pill aims for: wide enough to READ, not just
  * to see. Measured in a browser, the width each label needs before the ellipsis
  * bites — icon + gap + text + padding — is "Full Camera" 93px, "Annotation"
- * 90px, "1.80×" 61px, "1.5×" 55px. 96 covers the longest with a couple of px to
+ * 90px, "2.00×" 61px, "1.5×" 55px. 96 covers the longest with a couple of px to
  * spare; longer translations of those two still ellipsize, which is what the
  * ellipsis is for.
  *

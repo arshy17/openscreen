@@ -68,6 +68,7 @@ import {
 	type LinuxCaptureSourceKind,
 	LinuxNativeCaptureSession,
 } from "../native-bridge/capture/linuxNativeCaptureSession";
+import { alignCursorSamplesToCaptureStart } from "../native-bridge/cursor/recording/cursorTelemetryAlignment";
 import { createCursorRecordingSession } from "../native-bridge/cursor/recording/factory";
 import {
 	isMacCursorHelperUnavailable,
@@ -1150,12 +1151,7 @@ function shiftPendingCursorTelemetry(offsetMs: number) {
 
 	pendingCursorRecordingData = {
 		...pendingCursorRecordingData,
-		samples: pendingCursorRecordingData.samples
-			.map((sample) => ({
-				...sample,
-				timeMs: Math.max(0, sample.timeMs - offsetMs),
-			}))
-			.sort((a, b) => a.timeMs - b.timeMs),
+		samples: alignCursorSamplesToCaptureStart(pendingCursorRecordingData.samples, offsetMs),
 	};
 }
 
