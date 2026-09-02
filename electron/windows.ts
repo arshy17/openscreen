@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BrowserWindow, ipcMain, screen } from "electron";
+import { keepMacFloatingOverlayVisible, macFloatingOverlayOptions } from "./macFloatingOverlay";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,12 +47,10 @@ const CONTENT_PROTECTION_FORCED = process.env["OPENSCREEN_FORCE_CONTENT_PROTECTI
  * older macOS — where it may well work — would be a privacy regression made on
  * no evidence.
  *
- * NOTE: this leaves the HUD capturable on macOS 26. Apple already made that
- * partly true regardless — ScreenCaptureKit ignores `sharingType`, so any
- * SCK-based recorder (including *ours*, see
- * `electron/native/screencapturekit/`) captures these windows anyway. The
- * durable fix is to exclude our own windows via `SCContentFilter`'s
- * `excludingWindows:`, which that helper currently passes as `[]`.
+ * NOTE: this leaves the HUD capturable by third-party recorders on macOS 26.
+ * Our ScreenCaptureKit helper excludes the Electron process (with exact window
+ * ids as a fallback), so Open Screen recordings still omit the HUD, Notes and
+ * camera self-view without making those surfaces disappear for the user.
  */
 const CONTENT_PROTECTION_BREAKS_DISPLAY = (() => {
 	if (process.platform !== "darwin") return false;
@@ -342,6 +341,11 @@ export function createHudOverlayWindow(): BrowserWindow {
 	const win = new BrowserWindow({
 		width: windowWidth,
 		height: windowHeight,
+		// A macOS panel is the native non-activating overlay window: unlike a
+		// normal NSWindow it is allowed to join every Space and float over another
+		// application's native full-screen Space. This is what keeps both the HUD
+		// and camera self-view visible when the user switches to a full-screen app.
+		...macFloatingOverlayOptions(),
 		// Min/max are intentionally loose: the renderer resizes to fit content via
 		// "hud-overlay-set-size" (above), needed for the vertical tray to grow taller.
 		minWidth: 120,
@@ -383,10 +387,15 @@ export function createHudOverlayWindow(): BrowserWindow {
 	applyContentProtection(win, "HUD");
 
 	// Follow the user across macOS Spaces, else the HUD stays pinned to the Space
-	// it was first opened on.
-	if (process.platform === "darwin") {
-		win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-	}
+	// it was first opened on. `alwaysOnTop: true` in BrowserWindow options maps to
+	// Electron's low "floating" level. On macOS 26 that level can still fall behind
+	// an active maximised/full-screen application, leaving both the controls and
+	// camera self-view alive but invisible when the user switches apps. A recorder
+	// overlay has to live at the screen-saver level (the same class of surface used
+	// for screen-wide overlays) so it follows the user AND remains above the active
+	// application. Keep this macOS-only: other window managers give the ordinary
+	// always-on-top hint their own policy and don't share AppKit's level hierarchy.
+	keepMacFloatingOverlayVisible(win);
 
 	// Show only once painted to avoid the black rectangle flash when a transparent
 	// window is shown before its first paint.
@@ -615,6 +624,7 @@ export function createNotesWindow(): BrowserWindow {
 		minHeight: 400,
 		maxWidth: 640,
 		maxHeight: 720,
+		...macFloatingOverlayOptions(),
 		title: "OpenScreen - Notes",
 		backgroundColor: "#09090b",
 		resizable: true,
@@ -636,6 +646,10 @@ export function createNotesWindow(): BrowserWindow {
 	}
 
 	applyContentProtection(win, "Notes");
+	// Notes are a presenter-only teleprompter: follow the user to every Space and
+	// remain above the app they are demonstrating. ScreenCaptureKit separately
+	// excludes this process, so raising the window does not bake it into the video.
+	keepMacFloatingOverlayVisible(win);
 	win.once("ready-to-show", () => {
 		applyContentProtection(win, "Notes");
 		win.show();

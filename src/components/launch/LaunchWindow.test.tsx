@@ -3,6 +3,7 @@ import "@testing-library/jest-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadUserPreferences } from "@/lib/userPreferences";
 import { TooltipProvider } from "../ui/tooltip";
 import { HUD_BAR_BOTTOM, HUD_POPOVER_GAP, HUD_POPOVER_MAX_HEIGHT } from "./hudGeometry";
 import { LaunchWindow } from "./LaunchWindow";
@@ -58,6 +59,8 @@ const recorderState = vi.hoisted(() => ({
 		setWebcamDeviceName: vi.fn(),
 		systemAudioEnabled: false,
 		setSystemAudioEnabled: vi.fn(),
+		hideDesktopIcons: false,
+		setHideDesktopIcons: vi.fn(),
 		cursorCaptureMode: "editable-overlay",
 		setCursorCaptureMode: vi.fn(),
 		softwareEncoderFallbackNoticeVisible: false,
@@ -104,7 +107,11 @@ vi.mock("../../hooks/useCameraPreviewStream", () => ({
 }));
 
 vi.mock("../../lib/requestCameraAccess", () => ({
-	requestCameraAccess: vi.fn(async () => ({ success: true, granted: true, status: "granted" })),
+	requestCameraAccess: vi.fn(async () => ({
+		success: true,
+		granted: true,
+		status: "granted",
+	})),
 }));
 
 vi.mock("@/native", () => ({
@@ -146,6 +153,8 @@ vi.mock("@/contexts/I18nContext", () => ({
 			"recording.inProgress": "Recording",
 			"tooltips.useVerticalTray": "Use vertical tray",
 			"tooltips.useHorizontalTray": "Use horizontal tray",
+			"tooltips.hideDesktopIcons": "Hide desktop icons in recording",
+			"tooltips.showDesktopIcons": "Show desktop icons in recording",
 			"audio.enableSystemAudio": "Enable system audio",
 			"audio.disableSystemAudio": "Disable system audio",
 			"audio.enableMicrophone": "Enable microphone",
@@ -234,6 +243,7 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 		})),
 		getAppInfo: vi.fn(async () => appInfoState.value),
 		checkForUpdates: updateCheckMock,
+		setRecordingPrefs: vi.fn(async (patch) => ({ ...patch })),
 		setHudOverlaySize: vi.fn(),
 		setHudOverlayExpanded: vi.fn(),
 		setHudOverlayIgnoreMouseEvents: vi.fn(),
@@ -305,6 +315,8 @@ function resetLaunchMocks() {
 	recorderState.value.microphoneEnabled = false;
 	recorderState.value.setMicrophoneEnabled.mockClear();
 	recorderState.value.setMicrophoneDeviceId.mockClear();
+	recorderState.value.hideDesktopIcons = false;
+	recorderState.value.setHideDesktopIcons.mockClear();
 	recorderState.value.webcamEnabled = false;
 	recorderState.value.webcamPreviewStream = null;
 	recorderState.value.setWebcamEnabled.mockClear();
@@ -660,8 +672,14 @@ function stubBox(element: HTMLElement, width: number, height: number) {
 		y: 0,
 		toJSON: () => ({}),
 	});
-	Object.defineProperty(element, "scrollWidth", { value: width, configurable: true });
-	Object.defineProperty(element, "scrollHeight", { value: height, configurable: true });
+	Object.defineProperty(element, "scrollWidth", {
+		value: width,
+		configurable: true,
+	});
+	Object.defineProperty(element, "scrollHeight", {
+		value: height,
+		configurable: true,
+	});
 }
 
 async function flushResizeObservers() {
@@ -1016,6 +1034,20 @@ describe("LaunchWindow device buttons", () => {
 		});
 	});
 
+	it("hides desktop icons only in a macOS display recording", async () => {
+		stubElectronAPI(vi.fn(async () => displayOneSource));
+		renderLaunchWindow();
+
+		const button = await screen.findByTestId("launch-hide-desktop-icons-button");
+		await waitFor(() => expect(button).toBeEnabled());
+		fireEvent.click(button);
+
+		expect(recorderState.value.setHideDesktopIcons).toHaveBeenCalledWith(true);
+		expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith({
+			hideDesktopIcons: true,
+		});
+	});
+
 	it("shows the recorder camera stream as a persistent self-view", async () => {
 		const previewStream = {} as MediaStream;
 		recorderState.value.webcamEnabled = true;
@@ -1044,8 +1076,14 @@ describe("LaunchWindow device buttons", () => {
 	it("lets the self-view move independently and reach the HUD surface corners", async () => {
 		recorderState.value.webcamEnabled = true;
 		recorderState.value.webcamPreviewStream = {} as MediaStream;
-		Object.defineProperty(window, "innerWidth", { value: 800, configurable: true });
-		Object.defineProperty(window, "innerHeight", { value: 600, configurable: true });
+		Object.defineProperty(window, "innerWidth", {
+			value: 800,
+			configurable: true,
+		});
+		Object.defineProperty(window, "innerHeight", {
+			value: 600,
+			configurable: true,
+		});
 
 		renderLaunchWindow();
 
@@ -1065,8 +1103,17 @@ describe("LaunchWindow device buttons", () => {
 		selfView.hasPointerCapture = vi.fn(() => true);
 		selfView.releasePointerCapture = vi.fn();
 
-		fireEvent.pointerDown(selfView, { button: 0, pointerId: 7, clientX: 320, clientY: 330 });
-		fireEvent.pointerMove(selfView, { pointerId: 7, clientX: 920, clientY: 930 });
+		fireEvent.pointerDown(selfView, {
+			button: 0,
+			pointerId: 7,
+			clientX: 320,
+			clientY: 330,
+		});
+		fireEvent.pointerMove(selfView, {
+			pointerId: 7,
+			clientX: 920,
+			clientY: 930,
+		});
 
 		expect(selfView).toHaveStyle({ transform: "translate3d(290px, 176px, 0)" });
 		expect(selfView).toHaveAttribute("data-dragging", "true");
@@ -1077,9 +1124,45 @@ describe("LaunchWindow device buttons", () => {
 		fireEvent.doubleClick(selfView);
 		expect(selfView.style.transform).toBe("");
 
-		fireEvent.pointerDown(selfView, { button: 0, pointerId: 8, clientX: 320, clientY: 330 });
-		fireEvent.pointerMove(selfView, { pointerId: 8, clientX: -1000, clientY: -1000 });
-		expect(selfView).toHaveStyle({ transform: "translate3d(-290px, -300px, 0)" });
+		fireEvent.pointerDown(selfView, {
+			button: 0,
+			pointerId: 8,
+			clientX: 320,
+			clientY: 330,
+		});
+		fireEvent.pointerMove(selfView, {
+			pointerId: 8,
+			clientX: -1000,
+			clientY: -1000,
+		});
+		expect(selfView).toHaveStyle({
+			transform: "translate3d(-290px, -300px, 0)",
+		});
+	});
+
+	it("resizes the camera self-view from its corner and persists the new size", async () => {
+		recorderState.value.webcamEnabled = true;
+		recorderState.value.webcamPreviewStream = {} as MediaStream;
+		Object.defineProperty(window, "innerWidth", { value: 800, configurable: true });
+		Object.defineProperty(window, "innerHeight", { value: 600, configurable: true });
+
+		renderLaunchWindow();
+
+		const selfView = await screen.findByTestId("hud-webcam-self-view");
+		const handle = screen.getByRole("button", { name: "Resize camera preview" });
+		handle.setPointerCapture = vi.fn();
+		handle.hasPointerCapture = vi.fn(() => true);
+		handle.releasePointerCapture = vi.fn();
+
+		fireEvent.pointerDown(handle, { button: 0, pointerId: 8, clientX: 200, clientY: 120 });
+		fireEvent.pointerMove(handle, { pointerId: 8, clientX: 100, clientY: 50 });
+
+		expect(selfView).toHaveStyle({ width: "120px" });
+		expect(selfView).toHaveAttribute("data-resizing", "true");
+		expect(loadUserPreferences().webcamPreviewSize).toBe(120);
+
+		fireEvent.pointerUp(handle, { pointerId: 8 });
+		expect(selfView).toHaveAttribute("data-resizing", "false");
 	});
 
 	it("keeps the self-view visible while recording", async () => {
@@ -1151,13 +1234,14 @@ describe("LaunchWindow device settings", () => {
 		const panel = await screen.findByTestId("hud-device-settings");
 		const brightness = within(panel).getByLabelText("Brightness");
 		const size = within(panel).getByLabelText("Self-view size");
+		expect(size).toHaveAttribute("min", "80");
 
 		fireEvent.change(brightness, { target: { value: "125" } });
-		fireEvent.change(size, { target: { value: "300" } });
+		fireEvent.change(size, { target: { value: "80" } });
 		fireEvent.click(within(panel).getByRole("button", { name: "Circle" }));
 
 		expect(brightness).toHaveValue("125");
-		expect(size).toHaveValue("300");
+		expect(size).toHaveValue("80");
 		expect(within(panel).getByRole("button", { name: "Circle" })).toHaveAttribute(
 			"aria-pressed",
 			"true",
@@ -1167,13 +1251,13 @@ describe("LaunchWindow device settings", () => {
 
 		const selfView = await screen.findByTestId("hud-webcam-self-view");
 		expect(selfView).toHaveAttribute("data-shape", "circle");
-		expect(selfView).toHaveStyle({ width: "300px", aspectRatio: "1 / 1" });
+		expect(selfView).toHaveStyle({ width: "80px", aspectRatio: "1 / 1" });
 		expect(screen.getByTestId("hud-webcam-self-view-video")).toHaveStyle({
 			filter: "brightness(125%)",
 		});
 		expect(JSON.parse(localStorage.getItem("openscreen_user_preferences") ?? "{}")).toMatchObject({
 			webcamPreviewBrightness: 125,
-			webcamPreviewSize: 300,
+			webcamPreviewSize: 80,
 			webcamPreviewShape: "circle",
 		});
 
@@ -1314,6 +1398,86 @@ describe("LaunchWindow HUD drag", () => {
 
 		fireEvent.pointerUp(dragHandle, { screenX: 150, screenY: 140 });
 		expect(window.electronAPI.endHudOverlayDrag).toHaveBeenCalledTimes(1);
+	});
+
+	it("moves the HUD bar inside the expanded camera surface", async () => {
+		recorderState.value.webcamEnabled = true;
+		Object.defineProperty(window, "innerWidth", {
+			value: 1200,
+			configurable: true,
+		});
+		Object.defineProperty(window, "innerHeight", {
+			value: 800,
+			configurable: true,
+		});
+
+		renderLaunchWindow();
+
+		const dragHandle = await screen.findByTestId("hud-drag-handle");
+		const bar = dragHandle.closest("[data-tray-layout]") as HTMLElement;
+		vi.spyOn(bar, "getBoundingClientRect").mockReturnValue({
+			x: 200,
+			y: 700,
+			left: 200,
+			top: 700,
+			right: 900,
+			bottom: 756,
+			width: 700,
+			height: 56,
+			toJSON: () => ({}),
+		});
+
+		fireEvent.pointerDown(dragHandle, { screenX: 300, screenY: 720 });
+		fireEvent.pointerMove(dragHandle, { screenX: 400, screenY: 620 });
+
+		const anchor = screen.getByTestId("hud-anchor");
+		expect(anchor.style.getPropertyValue("--hud-drag-x")).toBe("100px");
+		expect(anchor.style.getPropertyValue("--hud-drag-y")).toBe("-100px");
+		expect(screen.getByTestId("hud-webcam-self-view")).toHaveStyle({
+			transform: "translate3d(-100px, 100px, 0)",
+		});
+		// The work-area-sized native window stays pinned; only its visible anchor moves.
+		expect(window.electronAPI.beginHudOverlayDrag).not.toHaveBeenCalled();
+		expect(window.electronAPI.dragHudOverlayTo).not.toHaveBeenCalled();
+
+		fireEvent.pointerUp(dragHandle, { screenX: 400, screenY: 620 });
+		expect(window.electronAPI.endHudOverlayDrag).not.toHaveBeenCalled();
+	});
+
+	it("clamps an expanded HUD drag so the control bar stays reachable", async () => {
+		recorderState.value.webcamEnabled = true;
+		Object.defineProperty(window, "innerWidth", {
+			value: 1200,
+			configurable: true,
+		});
+		Object.defineProperty(window, "innerHeight", {
+			value: 800,
+			configurable: true,
+		});
+
+		renderLaunchWindow();
+
+		const dragHandle = await screen.findByTestId("hud-drag-handle");
+		const bar = dragHandle.closest("[data-tray-layout]") as HTMLElement;
+		vi.spyOn(bar, "getBoundingClientRect").mockReturnValue({
+			x: 200,
+			y: 700,
+			left: 200,
+			top: 700,
+			right: 900,
+			bottom: 756,
+			width: 700,
+			height: 56,
+			toJSON: () => ({}),
+		});
+
+		fireEvent.pointerDown(dragHandle, { screenX: 300, screenY: 720 });
+		fireEvent.pointerMove(dragHandle, { screenX: 5000, screenY: 5000 });
+
+		const anchor = screen.getByTestId("hud-anchor");
+		// Max bar origin is 1200 - 700 = 500 and 800 - 56 = 744.
+		expect(anchor.style.getPropertyValue("--hud-drag-x")).toBe("300px");
+		expect(anchor.style.getPropertyValue("--hud-drag-y")).toBe("44px");
 	});
 
 	it("suppresses ResizeObserver-driven measurement while dragging, and measures once on release", async () => {

@@ -455,6 +455,41 @@ final class AudioTrackMixerTests: XCTestCase {
 		XCTAssertLessThan(loudest, 16_500)
 	}
 
+	// MARK: - Integer capture formats
+
+	/// A real macOS microphone can switch to signed 24-bit interleaved PCM (notably while
+	/// the webcam is also active). That exact format used to be rejected by the mixer, which
+	/// left a correctly-timed AAC track containing digital silence for the whole take.
+	/// Exercise both layouts Core Audio uses for 24 meaningful bits: packed in three bytes and
+	/// high-aligned in a four-byte slot.
+	func testInterleaved24BitMicrophoneAudioIsDecoded() {
+		for layout in [(bytesPerSample: 3, alignedHigh: false), (bytesPerSample: 4, alignedHigh: true)] {
+			let sink = RecordingSink()
+			let clock = TestClock(.zero)
+			let mixer = makeMixer(sink: sink, clock: clock, includesMicrophone: true, microphoneGain: 1)
+			mixer.beginTimeline(at: clock.now)
+
+			mixer.ingest(
+				makeInt24SourceBuffer(
+					burst(seconds: 0.1, left: 0.5, right: -0.25),
+					at: clock.now,
+					bytesPerSample: layout.bytesPerSample,
+					alignedHigh: layout.alignedHigh
+				),
+				from: .microphone
+			)
+			clock.advance(seconds: 0.1)
+			mixer.finish(atSourceTime: clock.now)
+
+			let frames = mixedFrames(sink)
+			XCTAssertEqual(seconds(ofFrames: frames), 0.1, accuracy: 0.011)
+			XCTAssertGreaterThan(peak(frames, from: 0, to: 0.1, channel: 0), 16_000)
+			XCTAssertLessThan(peak(frames, from: 0, to: 0.1, channel: 0), 16_500)
+			XCTAssertGreaterThan(peak(frames, from: 0, to: 0.1, channel: 1), 8_000)
+			XCTAssertLessThan(peak(frames, from: 0, to: 0.1, channel: 1), 8_300)
+		}
+	}
+
 	// MARK: - Fixtures
 
 	private func makeMixer(
@@ -572,6 +607,102 @@ final class AudioTrackMixerTests: XCTestCase {
 		}
 
 		// Copies into a block buffer of its own, so the planes above can go out of scope.
+		XCTAssertEqual(
+			CMSampleBufferSetDataBufferFromAudioBufferList(
+				sampleBuffer!,
+				blockBufferAllocator: kCFAllocatorDefault,
+				blockBufferMemoryAllocator: kCFAllocatorDefault,
+				flags: 0,
+				bufferList: bufferList.unsafePointer
+			),
+			noErr
+		)
+		XCTAssertEqual(CMSampleBufferSetDataReady(sampleBuffer!), noErr)
+		return sampleBuffer!
+	}
+
+	/// An interleaved signed 24-bit fixture matching the format reported by the real capture
+	/// helper. `bytesPerSample == 3` is packed; four bytes with `alignedHigh` stores the 24
+	/// meaningful bits in bits 31...8.
+	private func makeInt24SourceBuffer(
+		_ interleavedSamples: [Float],
+		at presentationTime: CMTime,
+		bytesPerSample: Int,
+		alignedHigh: Bool
+	) -> CMSampleBuffer {
+		precondition(bytesPerSample == 3 || bytesPerSample == 4)
+		let frameCount = interleavedSamples.count / channelCount
+		let bytesPerFrame = bytesPerSample * channelCount
+		var asbd = AudioStreamBasicDescription(
+			mSampleRate: Float64(sampleRate),
+			mFormatID: kAudioFormatLinearPCM,
+			mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagsNativeEndian
+				| (bytesPerSample == 3 ? kAudioFormatFlagIsPacked : 0)
+				| (alignedHigh ? kAudioFormatFlagIsAlignedHigh : 0),
+			mBytesPerPacket: UInt32(bytesPerFrame),
+			mFramesPerPacket: 1,
+			mBytesPerFrame: UInt32(bytesPerFrame),
+			mChannelsPerFrame: UInt32(channelCount),
+			mBitsPerChannel: 24,
+			mReserved: 0
+		)
+
+		var formatDescription: CMAudioFormatDescription?
+		XCTAssertEqual(
+			CMAudioFormatDescriptionCreate(
+				allocator: kCFAllocatorDefault,
+				asbd: &asbd,
+				layoutSize: 0,
+				layout: nil,
+				magicCookieSize: 0,
+				magicCookie: nil,
+				extensions: nil,
+				formatDescriptionOut: &formatDescription
+			),
+			noErr
+		)
+
+		var sampleBuffer: CMSampleBuffer?
+		XCTAssertEqual(
+			CMAudioSampleBufferCreateWithPacketDescriptions(
+				allocator: kCFAllocatorDefault,
+				dataBuffer: nil,
+				dataReady: false,
+				makeDataReadyCallback: nil,
+				refcon: nil,
+				formatDescription: formatDescription!,
+				sampleCount: frameCount,
+				presentationTimeStamp: presentationTime,
+				packetDescriptions: nil,
+				sampleBufferOut: &sampleBuffer
+			),
+			noErr
+		)
+
+		let byteCount = frameCount * bytesPerFrame
+		let memory = UnsafeMutableRawPointer.allocate(byteCount: byteCount, alignment: 16)
+		defer { memory.deallocate() }
+		let bytes = memory.bindMemory(to: UInt8.self, capacity: byteCount)
+		for (sampleIndex, sample) in interleavedSamples.enumerated() {
+			let clamped = min(max(sample, -1), 1)
+			let signed = Int32((clamped * 8_388_607).rounded())
+			var value = UInt32(bitPattern: signed) & 0x00ff_ffff
+			if alignedHigh {
+				value <<= 8
+			}
+			let offset = sampleIndex * bytesPerSample
+			for byte in 0..<bytesPerSample {
+				bytes[offset + byte] = UInt8(truncatingIfNeeded: value >> UInt32(byte * 8))
+			}
+		}
+
+		let bufferList = AudioBufferList.allocate(maximumBuffers: 1)
+		defer { free(bufferList.unsafeMutablePointer) }
+		bufferList[0] = AudioBuffer(
+			mNumberChannels: UInt32(channelCount),
+			mDataByteSize: UInt32(byteCount),
+			mData: memory
+		)
 		XCTAssertEqual(
 			CMSampleBufferSetDataBufferFromAudioBufferList(
 				sampleBuffer!,

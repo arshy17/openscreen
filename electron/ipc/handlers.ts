@@ -17,10 +17,19 @@ import {
 	systemPreferences,
 } from "electron";
 import {
+	type PrivacyVisionScanResult,
+	privacyVisionScanRequestSchema,
+	privacyVisionScanResultSchema,
+} from "../../src/lib/ai-edition/privacyVision";
+import {
 	type NativeLinuxRecordingRequest,
 	portalCursorMode,
 } from "../../src/lib/nativeLinuxRecording";
-import type { NativeMacRecordingRequest } from "../../src/lib/nativeMacRecording";
+import {
+	type NativeMacRecordingRequest,
+	parseMacWindowIdFromSourceId,
+	parseNativeMacAudioHealth,
+} from "../../src/lib/nativeMacRecording";
 import type { NativeWindowsRecordingRequest } from "../../src/lib/nativeWindowsRecording";
 import {
 	type CursorCaptureMode,
@@ -55,6 +64,7 @@ import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { getInstallChannel } from "../install-channel";
+import { showFloatingWindow } from "../macFloatingOverlay";
 import { RECORDINGS_DIR } from "../main";
 import { type AudioPeaksResult, getAudioPeaks } from "../media/audioPeaks";
 import {
@@ -91,6 +101,7 @@ import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
 import { requestMacScreenAccess } from "./macScreenAccess";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
+import { showOpenDialogWithParent, showSaveDialogWithParent } from "./nativeDialogs";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
 
 const PROJECT_FILE_EXTENSION = "openscreen";
@@ -107,6 +118,15 @@ const ALLOWED_IMPORT_VIDEO_EXTENSIONS = new Set([
 	".wmv",
 	".flv",
 	".ts",
+]);
+const ALLOWED_IMPORT_AUDIO_EXTENSIONS = new Set([
+	".mp3",
+	".m4a",
+	".aac",
+	".wav",
+	".flac",
+	".ogg",
+	".opus",
 ]);
 const PREVIEW_AUDIO_DIR = path.join(app.getPath("userData"), "preview-audio");
 const nativeMacCaptureEvents = new EventEmitter();
@@ -172,20 +192,12 @@ function resolveApprovedVideoPath(videoPath?: string | null): string | null {
 	return normalizedPath;
 }
 
-// Attach the parent window only when valid, to avoid passing a destroyed BrowserWindow to dialogs.
-function buildDialogOptions<T extends Electron.OpenDialogOptions | Electron.SaveDialogOptions>(
-	baseOptions: T,
-	parentWindow: BrowserWindow | null,
-): T & { parent?: BrowserWindow } {
-	const mainWindow = parentWindow;
-	if (mainWindow && !mainWindow.isDestroyed()) {
-		return { ...baseOptions, parent: mainWindow };
-	}
-	return baseOptions;
-}
-
 function hasAllowedImportVideoExtension(filePath: string): boolean {
 	return ALLOWED_IMPORT_VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+function hasAllowedImportAudioExtension(filePath: string): boolean {
+	return ALLOWED_IMPORT_AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
 function runProcess(
@@ -320,6 +332,19 @@ async function approveReadableVideoPath(
 		return null;
 	}
 
+	approveFilePath(normalizedPath);
+	return normalizedPath;
+}
+
+async function approveReadableAudioPath(filePath?: string | null): Promise<string | null> {
+	const normalizedPath = normalizeVideoSourcePath(filePath);
+	if (!normalizedPath || !hasAllowedImportAudioExtension(normalizedPath)) return null;
+	try {
+		const stats = await fs.stat(normalizedPath);
+		if (!stats.isFile()) return null;
+	} catch {
+		return null;
+	}
 	approveFilePath(normalizedPath);
 	return normalizedPath;
 }
@@ -522,6 +547,8 @@ export interface RecordingPrefs {
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
+	/** macOS display capture only: omit Finder's desktop windows (icons) from the recording. */
+	hideDesktopIcons: boolean;
 	cursorCaptureMode: CursorCaptureMode;
 }
 let recordingPrefs: RecordingPrefs = {
@@ -531,6 +558,7 @@ let recordingPrefs: RecordingPrefs = {
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,
+	hideDesktopIcons: false,
 	cursorCaptureMode: "editable-overlay",
 };
 
@@ -669,6 +697,7 @@ let nativeMacCaptureProcess: ChildProcessWithoutNullStreams | null = null;
 let nativeMacCaptureOutput = "";
 let nativeMacCaptureTargetPath: string | null = null;
 let nativeMacCaptureRecordingId: number | null = null;
+let nativeMacRequestedAudio = { system: false, microphone: false };
 let nativeMacCursorOffsetMs = 0;
 let nativeMacCursorCaptureMode: CursorCaptureMode = "editable-overlay";
 let nativeMacCursorRecordingStartMs = 0;
@@ -981,6 +1010,84 @@ async function findNativeMacCaptureHelperPath() {
 	}
 
 	return null;
+}
+
+function getPrivacyVisionHelperCandidates() {
+	const envPath = process.env.OPENSCREEN_PRIVACY_VISION_EXE?.trim();
+	const archTag = process.arch === "arm64" ? "darwin-arm64" : "darwin-x64";
+	const helperName = "openscreen-privacy-vision-helper";
+	return [
+		envPath,
+		resolveUnpackedAppPath("electron", "native", "screencapturekit", "build", helperName),
+		resolveUnpackedAppPath("electron", "native", "bin", archTag, helperName),
+		resolvePackagedResourcePath("electron", "native", "bin", archTag, helperName),
+	].filter((candidate): candidate is string => Boolean(candidate));
+}
+
+async function findPrivacyVisionHelperPath() {
+	if (process.platform !== "darwin") return null;
+	for (const candidate of getPrivacyVisionHelperCandidates()) {
+		try {
+			await fs.access(candidate, fsConstants.X_OK);
+			return candidate;
+		} catch {
+			// Try the next packaged or development helper location.
+		}
+	}
+	return null;
+}
+
+function runPrivacyVisionHelper(
+	helperPath: string,
+	request: ReturnType<typeof privacyVisionScanRequestSchema.parse>,
+): Promise<PrivacyVisionScanResult> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(helperPath, [JSON.stringify(request)], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let stdout = "";
+		let stderr = "";
+		let outputTooLarge = false;
+		const maximumOutputBytes = 16 * 1024 * 1024;
+		const timer = setTimeout(
+			() => {
+				child.kill("SIGKILL");
+				reject(new Error("The local Vision scan timed out after five minutes."));
+			},
+			5 * 60 * 1000,
+		);
+		child.stdout.on("data", (chunk: Buffer) => {
+			if (outputTooLarge) return;
+			stdout += chunk.toString("utf8");
+			if (Buffer.byteLength(stdout) > maximumOutputBytes) {
+				outputTooLarge = true;
+				child.kill("SIGKILL");
+			}
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			stderr = `${stderr}${chunk.toString("utf8")}`.slice(-8_192);
+		});
+		child.once("error", (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
+		child.once("close", (code) => {
+			clearTimeout(timer);
+			if (outputTooLarge) {
+				reject(new Error("The local Vision result exceeded the safe review limit."));
+				return;
+			}
+			if (code !== 0) {
+				reject(new Error(stderr.trim() || `The local Vision helper exited with code ${code}.`));
+				return;
+			}
+			try {
+				resolve(privacyVisionScanResultSchema.parse(JSON.parse(stdout)));
+			} catch {
+				reject(new Error("The local Vision helper returned an invalid review result."));
+			}
+		});
+	});
 }
 
 function isWindowsGraphicsCaptureOsSupported() {
@@ -2004,7 +2111,7 @@ export function registerIpcHandlers(
 	ipcMain.handle("open-notes", async () => {
 		const notesSelectorWin = getNotesWindow();
 		if (notesSelectorWin) {
-			notesSelectorWin.focus();
+			showFloatingWindow(notesSelectorWin);
 			return { opened: true };
 		}
 
@@ -2091,7 +2198,11 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("is-native-mac-capture-available", async () => {
 		if (process.platform !== "darwin") {
-			return { success: true, available: false, reason: "unsupported-platform" };
+			return {
+				success: true,
+				available: false,
+				reason: "unsupported-platform",
+			};
 		}
 
 		const helperPath = await findNativeMacCaptureHelperPath();
@@ -2102,7 +2213,11 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("is-native-linux-capture-available", async () => {
 		if (process.platform !== "linux") {
-			return { success: true, available: false, reason: "unsupported-platform" };
+			return {
+				success: true,
+				available: false,
+				reason: "unsupported-platform",
+			};
 		}
 
 		const helperPath = findPipeWireCursorHelperPath();
@@ -2203,13 +2318,22 @@ export function registerIpcHandlers(
 		async (_, request: NativeLinuxRecordingRequest) => {
 			try {
 				if (process.platform !== "linux") {
-					return { success: false, error: "Native Linux capture requires Linux." };
+					return {
+						success: false,
+						error: "Native Linux capture requires Linux.",
+					};
 				}
 				if (linuxNativeCaptureSession) {
-					return { success: false, error: "Native Linux capture is already running." };
+					return {
+						success: false,
+						error: "Native Linux capture is already running.",
+					};
 				}
 				if (!findPipeWireCursorHelperPath()) {
-					return { success: false, error: "Native Linux capture helper is not available." };
+					return {
+						success: false,
+						error: "Native Linux capture helper is not available.",
+					};
 				}
 
 				const recordingId =
@@ -2312,7 +2436,10 @@ export function registerIpcHandlers(
 		const cursorCaptureMode = linuxNativeCaptureCursorMode;
 
 		if (!session) {
-			return { success: false, error: "Native Linux capture is not running." };
+			return {
+				success: false,
+				error: "Native Linux capture is not running.",
+			};
 		}
 
 		try {
@@ -2395,12 +2522,18 @@ export function registerIpcHandlers(
 					};
 				}
 				if (nativeWindowsCaptureProcess) {
-					return { success: false, error: "Native Windows capture is already running." };
+					return {
+						success: false,
+						error: "Native Windows capture is already running.",
+					};
 				}
 
 				const helperPath = await findNativeWindowsCaptureHelperPath();
 				if (!helperPath) {
-					return { success: false, error: "Native Windows capture helper is not available." };
+					return {
+						success: false,
+						error: "Native Windows capture helper is not available.",
+					};
 				}
 
 				if (!request?.source?.sourceId) {
@@ -2620,19 +2753,31 @@ export function registerIpcHandlers(
 	ipcMain.handle("start-native-mac-recording", async (_, request: NativeMacRecordingRequest) => {
 		try {
 			if (process.platform !== "darwin") {
-				return { success: false, error: "Native macOS capture requires macOS." };
+				return {
+					success: false,
+					error: "Native macOS capture requires macOS.",
+				};
 			}
 			if (nativeMacCaptureProcess) {
-				return { success: false, error: "Native macOS capture is already running." };
+				return {
+					success: false,
+					error: "Native macOS capture is already running.",
+				};
 			}
 
 			const helperPath = await findNativeMacCaptureHelperPath();
 			if (!helperPath) {
-				return { success: false, error: "Native macOS capture helper is not available." };
+				return {
+					success: false,
+					error: "Native macOS capture helper is not available.",
+				};
 			}
 
 			if (!request?.source?.sourceId) {
-				return { success: false, error: "Native macOS capture request is missing a source." };
+				return {
+					success: false,
+					error: "Native macOS capture request is missing a source.",
+				};
 			}
 
 			const recordingId =
@@ -2662,6 +2807,22 @@ export function registerIpcHandlers(
 						null)
 					: getSelectedDisplay();
 			const bounds = request.source.bounds ?? sourceDisplay?.bounds ?? getSelectedSourceBounds();
+			// Content protection cannot be used for the HUD on macOS 26 because AppKit
+			// stops painting protected transparent windows there. Exclude the Electron
+			// application at ScreenCaptureKit's source filter instead: the user still
+			// sees the HUD, Notes and camera self-view, while the recording sees the
+			// unobscured application underneath. Window ids are sent as a fallback for
+			// systems where ScreenCaptureKit does not surface the owning application.
+			const excludedWindowIds = BrowserWindow.getAllWindows()
+				.filter((window) => !window.isDestroyed())
+				.map((window) => {
+					try {
+						return parseMacWindowIdFromSourceId(window.getMediaSourceId());
+					} catch {
+						return null;
+					}
+				})
+				.filter((windowId): windowId is number => windowId !== null);
 			const config: NativeMacRecordingRequest = {
 				...request,
 				schemaVersion: 1,
@@ -2669,6 +2830,8 @@ export function registerIpcHandlers(
 				source: {
 					...request.source,
 					bounds,
+					excludedProcessIds: [process.pid],
+					excludedWindowIds,
 				},
 				video: {
 					...request.video,
@@ -2696,6 +2859,8 @@ export function registerIpcHandlers(
 				audio: config.audio,
 				webcam: config.webcam,
 				cursor: config.cursor,
+				excludedProcessIds: config.source.excludedProcessIds,
+				excludedWindowIds: config.source.excludedWindowIds,
 				outputPath,
 			});
 
@@ -2703,6 +2868,10 @@ export function registerIpcHandlers(
 			nativeMacCaptureOutput = "";
 			nativeMacCaptureTargetPath = outputPath;
 			nativeMacCaptureRecordingId = recordingId;
+			nativeMacRequestedAudio = {
+				system: Boolean(config.audio.system.enabled),
+				microphone: Boolean(config.audio.microphone.enabled),
+			};
 			nativeMacCursorOffsetMs = 0;
 			nativeMacCursorCaptureMode = cursorCaptureMode;
 			nativeMacCursorRecordingStartMs = 0;
@@ -2750,6 +2919,7 @@ export function registerIpcHandlers(
 			nativeMacCaptureProcess = null;
 			nativeMacCaptureTargetPath = null;
 			nativeMacCaptureRecordingId = null;
+			nativeMacRequestedAudio = { system: false, microphone: false };
 			nativeMacCursorOffsetMs = 0;
 			nativeMacCursorCaptureMode = "editable-overlay";
 			nativeMacCursorRecordingStartMs = 0;
@@ -2757,7 +2927,10 @@ export function registerIpcHandlers(
 			nativeMacPauseRanges = [];
 			nativeMacIsPaused = false;
 			await stopCursorRecording();
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	});
 
@@ -2774,7 +2947,10 @@ export function registerIpcHandlers(
 			return { success: true };
 		}
 		if (!proc.stdin.writable) {
-			return { success: false, error: "Native macOS capture command channel is closed." };
+			return {
+				success: false,
+				error: "Native macOS capture command channel is closed.",
+			};
 		}
 
 		try {
@@ -2783,7 +2959,10 @@ export function registerIpcHandlers(
 			nativeMacPauseStartedAtMs = Date.now();
 			return { success: true };
 		} catch (error) {
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	});
 
@@ -2800,7 +2979,10 @@ export function registerIpcHandlers(
 			return { success: true };
 		}
 		if (!proc.stdin.writable) {
-			return { success: false, error: "Native macOS capture command channel is closed." };
+			return {
+				success: false,
+				error: "Native macOS capture command channel is closed.",
+			};
 		}
 
 		try {
@@ -2809,20 +2991,29 @@ export function registerIpcHandlers(
 			nativeMacIsPaused = false;
 			return { success: true };
 		} catch (error) {
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	});
 
 	ipcMain.handle("pause-native-windows-recording", async () => {
 		const proc = nativeWindowsCaptureProcess;
 		if (!proc) {
-			return { success: false, error: "Native Windows capture is not running." };
+			return {
+				success: false,
+				error: "Native Windows capture is not running.",
+			};
 		}
 		if (nativeWindowsIsPaused) {
 			return { success: true };
 		}
 		if (!proc.stdin.writable) {
-			return { success: false, error: "Native Windows capture command channel is closed." };
+			return {
+				success: false,
+				error: "Native Windows capture command channel is closed.",
+			};
 		}
 
 		try {
@@ -2831,20 +3022,29 @@ export function registerIpcHandlers(
 			nativeWindowsPauseStartedAtMs = Date.now();
 			return { success: true };
 		} catch (error) {
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	});
 
 	ipcMain.handle("resume-native-windows-recording", async () => {
 		const proc = nativeWindowsCaptureProcess;
 		if (!proc) {
-			return { success: false, error: "Native Windows capture is not running." };
+			return {
+				success: false,
+				error: "Native Windows capture is not running.",
+			};
 		}
 		if (!nativeWindowsIsPaused) {
 			return { success: true };
 		}
 		if (!proc.stdin.writable) {
-			return { success: false, error: "Native Windows capture command channel is closed." };
+			return {
+				success: false,
+				error: "Native Windows capture command channel is closed.",
+			};
 		}
 
 		try {
@@ -2853,7 +3053,10 @@ export function registerIpcHandlers(
 			nativeWindowsIsPaused = false;
 			return { success: true };
 		} catch (error) {
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	});
 
@@ -2865,7 +3068,10 @@ export function registerIpcHandlers(
 		const cursorCaptureMode = nativeWindowsCursorCaptureMode;
 
 		if (!proc) {
-			return { success: false, error: "Native Windows capture is not running." };
+			return {
+				success: false,
+				error: "Native Windows capture is not running.",
+			};
 		}
 
 		// Discarding does not need a finalized file, so it must not wait for one.
@@ -3016,7 +3222,12 @@ export function registerIpcHandlers(
 				}
 			}
 			const session: RecordingSession = webcamVideoPath
-				? { screenVideoPath, webcamVideoPath, createdAt: recordingId, cursorCaptureMode }
+				? {
+						screenVideoPath,
+						webcamVideoPath,
+						createdAt: recordingId,
+						cursorCaptureMode,
+					}
 				: { screenVideoPath, createdAt: recordingId, cursorCaptureMode };
 			setCurrentRecordingSessionState(session);
 			currentProjectPath = null;
@@ -3026,7 +3237,10 @@ export function registerIpcHandlers(
 				`${path.parse(screenVideoPath).name}${RECORDING_SESSION_SUFFIX}`,
 			);
 			await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
-			await registerRecordingMediaLinks(screenVideoPath, { webcamVideoPath, cursorCaptureMode });
+			await registerRecordingMediaLinks(screenVideoPath, {
+				webcamVideoPath,
+				cursorCaptureMode,
+			});
 
 			return {
 				success: true,
@@ -3067,6 +3281,7 @@ export function registerIpcHandlers(
 		const preferredPath = nativeMacCaptureTargetPath;
 		const recordingId = nativeMacCaptureRecordingId ?? Date.now();
 		const cursorCaptureMode = nativeMacCursorCaptureMode;
+		const requestedAudio = nativeMacRequestedAudio;
 
 		if (!proc) {
 			return { success: false, error: "Native macOS capture is not running." };
@@ -3117,20 +3332,61 @@ export function registerIpcHandlers(
 			await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
 			await registerRecordingMediaLinks(screenVideoPath, { cursorCaptureMode });
 
+			let audioHealth = parseNativeMacAudioHealth(nativeMacCaptureOutput, requestedAudio);
+			if (requestedAudio.system || requestedAudio.microphone) {
+				try {
+					const peaks = await getAudioPeaks(screenVideoPath, audioHealth.trackSeconds);
+					if (!peaks) {
+						audioHealth = {
+							...audioHealth,
+							status: "unavailable",
+							warning:
+								audioHealth.warning ??
+								"The saved file's audio track could not be decoded for verification. The take was preserved.",
+						};
+					} else {
+						let peakAmplitude = 0;
+						for (const value of peaks) peakAmplitude = Math.max(peakAmplitude, Math.abs(value));
+						audioHealth = { ...audioHealth, peakAmplitude };
+						if (peakAmplitude < 0.0015) {
+							audioHealth = {
+								...audioHealth,
+								status: "warning",
+								warning:
+									"The saved audio track appears silent. The take was preserved; check the selected microphone and input level before recording again.",
+							};
+						}
+					}
+				} catch (error) {
+					console.warn("[native-sck] saved audio verification failed:", error);
+					audioHealth = {
+						...audioHealth,
+						status: "warning",
+						warning:
+							"The saved file has no decodable audio track even though audio was enabled. The take was preserved for recovery.",
+					};
+				}
+			}
+
 			return {
 				success: true,
 				path: screenVideoPath,
 				session,
+				audioHealth,
 				message: "Native macOS recording session stored successfully",
 			};
 		} catch (error) {
 			console.error("Failed to stop native macOS recording:", error);
 			await stopCursorRecording();
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		} finally {
 			nativeMacCaptureProcess = null;
 			nativeMacCaptureTargetPath = null;
 			nativeMacCaptureRecordingId = null;
+			nativeMacRequestedAudio = { system: false, microphone: false };
 			nativeMacCursorOffsetMs = 0;
 			nativeMacCursorCaptureMode = "editable-overlay";
 			nativeMacCursorRecordingStartMs = 0;
@@ -3264,7 +3520,10 @@ export function registerIpcHandlers(
 		"attach-native-mac-webcam-recording",
 		async (_, payload: AttachNativeMacWebcamRecordingInput) => {
 			if (process.platform !== "darwin") {
-				return { success: false, error: "Native macOS webcam attachment requires macOS." };
+				return {
+					success: false,
+					error: "Native macOS webcam attachment requires macOS.",
+				};
 			}
 			return attachNativeWebcamRecording("macOS", payload);
 		},
@@ -3274,7 +3533,10 @@ export function registerIpcHandlers(
 		"attach-native-linux-webcam-recording",
 		async (_, payload: AttachNativeMacWebcamRecordingInput) => {
 			if (process.platform !== "linux") {
-				return { success: false, error: "Native Linux webcam attachment requires Linux." };
+				return {
+					success: false,
+					error: "Native Linux webcam attachment requires Linux.",
+				};
 			}
 			return attachNativeWebcamRecording("Linux", payload);
 		},
@@ -3375,7 +3637,11 @@ export function registerIpcHandlers(
 					...(webcamOffsetMs !== undefined ? { webcamOffsetMs } : {}),
 					...(cursorCaptureMode ? { cursorCaptureMode } : {}),
 				}
-			: { screenVideoPath, createdAt, ...(cursorCaptureMode ? { cursorCaptureMode } : {}) };
+			: {
+					screenVideoPath,
+					createdAt,
+					...(cursorCaptureMode ? { cursorCaptureMode } : {}),
+				};
 		setCurrentRecordingSessionState(session);
 		currentProjectPath = null;
 
@@ -3437,7 +3703,11 @@ export function registerIpcHandlers(
 			return { success: true, path: videoPath };
 		} catch (error) {
 			console.error("Failed to get video path:", error);
-			return { success: false, message: "Failed to get video path", error: String(error) };
+			return {
+				success: false,
+				message: "Failed to get video path",
+				error: String(error),
+			};
 		}
 	});
 
@@ -3482,7 +3752,10 @@ export function registerIpcHandlers(
 			const parsed = new URL(url);
 			if (!EXTERNAL_URL_PROTOCOLS.has(parsed.protocol)) {
 				console.warn(`Refused to open external URL with protocol ${parsed.protocol}`);
-				return { success: false, error: `Unsupported URL protocol: ${parsed.protocol}` };
+				return {
+					success: false,
+					error: `Unsupported URL protocol: ${parsed.protocol}`,
+				};
 			}
 			await shell.openExternal(parsed.toString());
 			return { success: true };
@@ -3497,12 +3770,58 @@ export function registerIpcHandlers(
 		return resolveAssetBasePath();
 	});
 
+	ipcMain.handle("analyze-privacy-vision", async (_, rawRequest: unknown) => {
+		if (process.platform !== "darwin") {
+			return {
+				success: false,
+				unavailable: true,
+				error: "Visual privacy detection is currently available only in the macOS beta.",
+			};
+		}
+		const parsed = privacyVisionScanRequestSchema.safeParse(rawRequest);
+		if (!parsed.success) return { success: false, error: "Invalid visual privacy scan request." };
+		const approvedPath = await approveReadableVideoPath(parsed.data.videoPath);
+		if (!approvedPath) {
+			return { success: false, error: "The selected project video is not approved or readable." };
+		}
+		const helperPath = await findPrivacyVisionHelperPath();
+		if (!helperPath) {
+			return {
+				success: false,
+				unavailable: true,
+				error: "The local Vision privacy helper is not installed in this build.",
+			};
+		}
+		try {
+			return await runPrivacyVisionHelper(helperPath, {
+				...parsed.data,
+				videoPath: approvedPath,
+			});
+		} catch (error) {
+			console.error("Local Vision privacy review failed:", error);
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : "Local Vision privacy review failed.",
+			};
+		}
+	});
+
 	ipcMain.handle("pick-export-save-path", async (_, fileName: string, exportFolder?: string) => {
 		try {
 			const isGif = fileName.toLowerCase().endsWith(".gif");
 			const filters = isGif
-				? [{ name: mainT("dialogs", "fileDialogs.gifImage"), extensions: ["gif"] }]
-				: [{ name: mainT("dialogs", "fileDialogs.mp4Video"), extensions: ["mp4"] }];
+				? [
+						{
+							name: mainT("dialogs", "fileDialogs.gifImage"),
+							extensions: ["gif"],
+						},
+					]
+				: [
+						{
+							name: mainT("dialogs", "fileDialogs.mp4Video"),
+							extensions: ["mp4"],
+						},
+					];
 
 			// Prefer the user's last export folder if it still exists, else ~/Downloads.
 			// Validate here because the renderer can't stat the filesystem.
@@ -3520,7 +3839,8 @@ export function registerIpcHandlers(
 					);
 				}
 			}
-			const dialogOptions = buildDialogOptions(
+			const result = await showSaveDialogWithParent(
+				dialog,
 				{
 					title: isGif
 						? mainT("dialogs", "fileDialogs.saveGif")
@@ -3531,7 +3851,6 @@ export function registerIpcHandlers(
 				},
 				getMainWindow(),
 			);
-			const result = await dialog.showSaveDialog(dialogOptions);
 
 			if (result.canceled || !result.filePath) {
 				return { success: false, canceled: true, message: "Export canceled" };
@@ -3581,7 +3900,8 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("open-video-file-picker", async () => {
 		try {
-			const dialogOptions = buildDialogOptions(
+			const result = await showOpenDialogWithParent(
+				dialog,
 				{
 					title: mainT("dialogs", "fileDialogs.selectVideo"),
 					defaultPath: RECORDINGS_DIR,
@@ -3590,13 +3910,15 @@ export function registerIpcHandlers(
 							name: mainT("dialogs", "fileDialogs.videoFiles"),
 							extensions: ["webm", "mp4", "mov", "avi", "mkv", "m4v", "wmv", "flv", "ts"],
 						},
-						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
+						{
+							name: mainT("dialogs", "fileDialogs.allFiles"),
+							extensions: ["*"],
+						},
 					],
 					properties: ["openFile"],
 				},
 				getMainWindow(),
 			);
-			const result = await dialog.showOpenDialog(dialogOptions);
 
 			if (result.canceled || result.filePaths.length === 0) {
 				return { success: false, canceled: true };
@@ -3625,6 +3947,49 @@ export function registerIpcHandlers(
 		}
 	});
 
+	ipcMain.handle("open-audio-file-picker", async () => {
+		try {
+			const audioFilters = [
+				{
+					name: mainT("dialogs", "fileDialogs.audioFiles"),
+					extensions: ["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"],
+				},
+				{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
+			];
+			const result = await showOpenDialogWithParent(
+				dialog,
+				{
+					title: mainT("dialogs", "fileDialogs.selectAudio"),
+					filters: audioFilters,
+					properties: ["openFile"],
+				},
+				getMainWindow(),
+			);
+			if (result.canceled || result.filePaths.length === 0) {
+				return { success: false, canceled: true };
+			}
+			const normalizedPath = await approveReadableAudioPath(result.filePaths[0]);
+			if (!normalizedPath) {
+				return {
+					success: false,
+					message: "Selected file is not a supported readable audio file",
+				};
+			}
+			return {
+				success: true,
+				path: normalizedPath,
+				name: path.basename(normalizedPath),
+			};
+		} catch (error) {
+			console.error("Failed to open audio file picker:", error);
+			return {
+				success: false,
+				message: "Failed to open audio file picker",
+				error: String(error),
+			};
+		}
+	});
+
 	ipcMain.handle("reveal-in-folder", async (_, filePath: string) => {
 		try {
 			// showItemInFolder returns nothing, it throws on error
@@ -3640,7 +4005,10 @@ export function registerIpcHandlers(
 					// openPath returned an error message
 					return { success: false, error: openPathResult };
 				}
-				return { success: true, message: "Could not reveal item, but opened directory." };
+				return {
+					success: true,
+					message: "Could not reveal item, but opened directory.",
+				};
 			} catch (openError) {
 				console.error(`Error opening directory: ${path.dirname(filePath)}`, openError);
 				return { success: false, error: String(error) };
@@ -3751,7 +4119,10 @@ export function registerIpcHandlers(
 				return { success: false, message: "Invalid chunk range" };
 			}
 			if (length > MAX_IPC_CHUNK_BYTES) {
-				return { success: false, message: "Requested chunk size exceeds limit" };
+				return {
+					success: false,
+					message: "Requested chunk size exceeds limit",
+				};
 			}
 
 			const handle = await fs.open(normalizedPath, "r");
@@ -3825,7 +4196,8 @@ export function registerIpcHandlers(
 				? safeName
 				: `${safeName}.${PROJECT_FILE_EXTENSION}`;
 
-			const dialogOptions = buildDialogOptions(
+			const result = await showSaveDialogWithParent(
+				dialog,
 				{
 					title: mainT("dialogs", "fileDialogs.saveProject"),
 					defaultPath: path.join(RECORDINGS_DIR, defaultName),
@@ -3840,7 +4212,6 @@ export function registerIpcHandlers(
 				},
 				getMainWindow(),
 			);
-			const result = await dialog.showSaveDialog(dialogOptions);
 
 			if (result.canceled || !result.filePath) {
 				return {
@@ -3902,7 +4273,8 @@ export function registerIpcHandlers(
 					);
 				}
 			}
-			const dialogOptions = buildDialogOptions(
+			const result = await showOpenDialogWithParent(
+				dialog,
 				{
 					title: mainT("dialogs", "fileDialogs.openProject"),
 					defaultPath: defaultDir,
@@ -3914,16 +4286,22 @@ export function registerIpcHandlers(
 							extensions: [PROJECT_FILE_EXTENSION, "axcut"],
 						},
 						{ name: "JSON", extensions: ["json"] },
-						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
+						{
+							name: mainT("dialogs", "fileDialogs.allFiles"),
+							extensions: ["*"],
+						},
 					],
 					properties: ["openFile"],
 				},
 				getMainWindow(),
 			);
-			const result = await dialog.showOpenDialog(dialogOptions);
 
 			if (result.canceled || result.filePaths.length === 0) {
-				return { success: false, canceled: true, message: "Open project canceled" };
+				return {
+					success: false,
+					canceled: true,
+					message: "Open project canceled",
+				};
 			}
 
 			const filePath = result.filePaths[0];
@@ -4067,7 +4445,10 @@ export function registerIpcHandlers(
 				}
 				const resolution = await resolveMediaLinksForVideo(normalized);
 				if (!resolution.webcamVideoPath) {
-					return { success: false, error: "No camera attached to this recording" };
+					return {
+						success: false,
+						error: "No camera attached to this recording",
+					};
 				}
 				return {
 					success: true,
@@ -4130,7 +4511,10 @@ export function registerIpcHandlers(
 	// that wasn't created with an overlay, which is what setTitleBarOverlay throws on.
 	ipcMain.on("set-titlebar-overlay", (event, color: string, symbolColor: string) => {
 		try {
-			BrowserWindow.fromWebContents(event.sender)?.setTitleBarOverlay({ color, symbolColor });
+			BrowserWindow.fromWebContents(event.sender)?.setTitleBarOverlay({
+				color,
+				symbolColor,
+			});
 		} catch {
 			// Best-effort cosmetic.
 		}
@@ -4157,8 +4541,15 @@ export function registerIpcHandlers(
 
 	ipcMain.handle(
 		"save-diagnostic",
-		async (_, payload: { error: string; stack?: string; projectState: unknown; logs: string[] }) =>
-			exportDiagnosticFile(payload),
+		async (
+			_,
+			payload: {
+				error: string;
+				stack?: string;
+				projectState: unknown;
+				logs: string[];
+			},
+		) => exportDiagnosticFile(payload),
 	);
 
 	// One instance each, not one per call. DocumentService serialises saves of a
@@ -4169,6 +4560,7 @@ export function registerIpcHandlers(
 	const aiEditionDocuments = new DocumentService(
 		path.join(app.getPath("userData"), "projects"),
 		RECORDINGS_DIR,
+		path.join(app.getPath("documents"), "OpenScreen Projects"),
 	);
 
 	// LlmConfigStore is single-instance for a duller reason — its constructor does

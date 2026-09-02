@@ -33,6 +33,10 @@ let package = Package(
 		.executable(
 			name: "openscreen-macos-cursor-helper",
 			targets: ["OpenScreenMacOSCursorHelper"]
+		),
+		.executable(
+			name: "openscreen-privacy-vision-helper",
+			targets: ["OpenScreenPrivacyVisionHelper"]
 		)
 	],
 	targets: [
@@ -53,6 +57,10 @@ let package = Package(
 		.executableTarget(
 			name: "OpenScreenMacOSCursorHelper",
 			path: "Sources/OpenScreenMacOSCursorHelper"
+		),
+		.executableTarget(
+			name: "OpenScreenPrivacyVisionHelper",
+			path: "Sources/OpenScreenPrivacyVisionHelper"
 		),
 		.testTarget(
 			name: "OpenScreenCaptureCoreTests",

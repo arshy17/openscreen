@@ -3,6 +3,7 @@ import {
 	DEFAULT_PREFS,
 	getProjectFolder,
 	loadUserPreferences,
+	MIN_WEBCAM_PREVIEW_SIZE,
 	parentDirectoryOf,
 	saveUserPreferences,
 } from "./userPreferences";
@@ -137,13 +138,13 @@ describe("user preferences", () => {
 	it("persists webcam preview appearance preferences", () => {
 		saveUserPreferences({
 			webcamPreviewBrightness: 125,
-			webcamPreviewSize: 300,
+			webcamPreviewSize: MIN_WEBCAM_PREVIEW_SIZE,
 			webcamPreviewShape: "circle",
 		});
 
 		expect(loadUserPreferences()).toMatchObject({
 			webcamPreviewBrightness: 125,
-			webcamPreviewSize: 300,
+			webcamPreviewSize: MIN_WEBCAM_PREVIEW_SIZE,
 			webcamPreviewShape: "circle",
 		});
 	});

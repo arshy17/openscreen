@@ -1,4 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type {
+	PrivacyVisionScanRequest,
+	PrivacyVisionScanResponse,
+} from "../src/lib/ai-edition/privacyVision";
 import type { NativeLinuxRecordingRequest } from "../src/lib/nativeLinuxRecording";
 import type { NativeMacRecordingRequest } from "../src/lib/nativeMacRecording";
 import type { NativeWindowsRecordingRequest } from "../src/lib/nativeWindowsRecording";
@@ -246,6 +250,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	stopNativeMacRecording: (discard?: boolean) => {
 		return ipcRenderer.invoke("stop-native-mac-recording", discard);
 	},
+	analyzePrivacyVision: (request: PrivacyVisionScanRequest) => {
+		return ipcRenderer.invoke(
+			"analyze-privacy-vision",
+			request,
+		) as Promise<PrivacyVisionScanResponse>;
+	},
 	attachNativeMacWebcamRecording: (payload: {
 		screenVideoPath: string;
 		recordingId: number;
@@ -278,6 +288,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	openVideoFilePicker: () => {
 		return ipcRenderer.invoke("open-video-file-picker");
+	},
+	openAudioFilePicker: () => {
+		return ipcRenderer.invoke("open-audio-file-picker");
 	},
 	setCurrentVideoPath: (path: string) => {
 		return ipcRenderer.invoke("set-current-video-path", path);

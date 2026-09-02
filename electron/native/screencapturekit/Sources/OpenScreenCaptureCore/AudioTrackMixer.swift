@@ -471,7 +471,7 @@ public final class AudioTrackMixer {
 	/// Decodes one capture buffer into gain-applied 48 kHz interleaved-stereo Float.
 	///
 	/// Both SCStream audio outputs are configured for 48 kHz stereo, so in practice this is a
-	/// straight Float32 de-interleave. The format-adaptive paths (Int16/Int32, interleaved or
+	/// straight Float32 de-interleave. The format-adaptive paths (Int16/Int24/Int32, interleaved or
 	/// not, off-rate sources) exist because the format is the stream's to choose, not ours —
 	/// and because a resampled source's rounding drift is absorbed by timeline placement
 	/// rather than accumulating, unlike in a FIFO mixer.
@@ -487,11 +487,12 @@ public final class AudioTrackMixer {
 		let sourceChannels = Int(asbd.mChannelsPerFrame)
 		let bitsPerChannel = Int(asbd.mBitsPerChannel)
 		let isFloat = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+		let isSignedInteger = asbd.mFormatFlags & kAudioFormatFlagIsSignedInteger != 0
 		guard asbd.mFormatID == kAudioFormatLinearPCM,
 			sourceChannels > 0,
 			asbd.mSampleRate > 0,
 			sourceFrames > 0,
-			isFloat ? bitsPerChannel == 32 : (bitsPerChannel == 16 || bitsPerChannel == 32)
+			isFloat ? bitsPerChannel == 32 : (isSignedInteger && [16, 24, 32].contains(bitsPerChannel))
 		else {
 			return nil
 		}
@@ -524,7 +525,26 @@ public final class AudioTrackMixer {
 		}
 
 		return withExtendedLifetime(blockBuffer) { () -> [Float]? in
-			let bytesPerChannelSample = bitsPerChannel / 8
+			// `mBitsPerChannel` is the number of meaningful bits, not necessarily the
+			// size of one sample slot. In particular, macOS can expose a microphone as
+			// signed 24-bit PCM in either a packed 3-byte slot or a 4-byte, high-aligned
+			// slot. Deriving the stride as `bits / 8` made the latter overlap adjacent
+			// samples, while rejecting 24 outright made both layouts become a silent AAC
+			// track. `mBytesPerFrame` describes the actual in-memory slot.
+			let bytesPerFrame = Int(asbd.mBytesPerFrame)
+			guard bytesPerFrame > 0,
+				isNonInterleaved || bytesPerFrame % sourceChannels == 0
+			else {
+				return nil
+			}
+			let bytesPerChannelSample = isNonInterleaved
+				? bytesPerFrame
+				: bytesPerFrame / sourceChannels
+			guard bytesPerChannelSample >= (bitsPerChannel + 7) / 8,
+				bytesPerChannelSample <= MemoryLayout<UInt32>.size
+			else {
+				return nil
+			}
 			// `bufferList` is subscripted against its own count, not the format's channel
 			// count: indexing past `count` would trap rather than degrade.
 			guard bufferList.count > 0 else {
@@ -549,7 +569,10 @@ public final class AudioTrackMixer {
 						stride: isNonInterleaved ? 1 : sourceChannels,
 						start: isNonInterleaved ? 0 : sourceChannel,
 						bytesPerSample: bytesPerChannelSample,
-						isFloat: isFloat
+						bitsPerChannel: bitsPerChannel,
+						isFloat: isFloat,
+						isBigEndian: asbd.mFormatFlags & kAudioFormatFlagIsBigEndian != 0,
+						isAlignedHigh: asbd.mFormatFlags & kAudioFormatFlagIsAlignedHigh != 0
 					)
 				)
 			}
@@ -690,7 +713,10 @@ public final class AudioTrackMixer {
 		let stride: Int
 		let start: Int
 		let bytesPerSample: Int
+		let bitsPerChannel: Int
 		let isFloat: Bool
+		let isBigEndian: Bool
+		let isAlignedHigh: Bool
 
 		func value(at frame: Int) -> Float {
 			let index = start + frame * stride
@@ -699,13 +725,41 @@ public final class AudioTrackMixer {
 			}
 
 			let offset = index * bytesPerSample
+			let raw = readUnsigned(at: offset)
 			if isFloat {
-				return base.loadUnaligned(fromByteOffset: offset, as: Float.self)
+				return Float(bitPattern: UInt32(truncatingIfNeeded: raw))
 			}
-			if bytesPerSample == 2 {
-				return Float(base.loadUnaligned(fromByteOffset: offset, as: Int16.self)) / 32_768
+
+			let containerBits = bytesPerSample * 8
+			let meaningful = min(bitsPerChannel, containerBits)
+			let aligned = isAlignedHigh && meaningful < containerBits
+				? raw >> UInt64(containerBits - meaningful)
+				: raw
+			let mask = meaningful == 64 ? UInt64.max : (UInt64(1) << UInt64(meaningful)) - 1
+			let value = aligned & mask
+			let signBit = UInt64(1) << UInt64(meaningful - 1)
+			let signed = value & signBit == 0
+				? Int64(value)
+				: Int64(value) - Int64(UInt64(1) << UInt64(meaningful))
+			return Float(signed) / Float(UInt64(1) << UInt64(meaningful - 1))
+		}
+
+		/// Reads a one-to-four-byte PCM slot without assuming alignment. Audio buffers
+		/// supplied by CoreMedia are normally aligned, but packed 24-bit samples are
+		/// three bytes wide and every second sample is necessarily unaligned.
+		private func readUnsigned(at offset: Int) -> UInt64 {
+			let bytes = base.assumingMemoryBound(to: UInt8.self).advanced(by: offset)
+			var value: UInt64 = 0
+			if isBigEndian {
+				for byte in 0..<bytesPerSample {
+					value = (value << 8) | UInt64(bytes[byte])
+				}
+				return value
 			}
-			return Float(base.loadUnaligned(fromByteOffset: offset, as: Int32.self)) / 2_147_483_648
+			for byte in 0..<bytesPerSample {
+				value |= UInt64(bytes[byte]) << UInt64(byte * 8)
+			}
+			return value
 		}
 	}
 

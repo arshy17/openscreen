@@ -102,6 +102,8 @@ type UseScreenRecorderReturn = {
 	setWebcamDeviceName: (deviceName: string | undefined) => void;
 	systemAudioEnabled: boolean;
 	setSystemAudioEnabled: (enabled: boolean) => void;
+	hideDesktopIcons: boolean;
+	setHideDesktopIcons: (enabled: boolean) => void;
 	webcamEnabled: boolean;
 	/** Live renderer-owned camera stream used for the HUD self-view. */
 	webcamPreviewStream: MediaStream | null;
@@ -206,7 +208,9 @@ export async function finalizeWebcamAsset(
 			return { error: "the webcam produced no data" };
 		}
 		const fixedWebcamBlob = await fixWebmDuration(webcamBlob, durationMs);
-		return { asset: { videoData: await fixedWebcamBlob.arrayBuffer(), fileName } };
+		return {
+			asset: { videoData: await fixedWebcamBlob.arrayBuffer(), fileName },
+		};
 	} catch (error) {
 		console.error(`Failed to finalize native ${platformLabel} webcam recording:`, error);
 		return { error: error instanceof Error ? error.message : String(error) };
@@ -242,6 +246,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [webcamDeviceId, setWebcamDeviceId] = useState<string | undefined>(undefined);
 	const [webcamDeviceName, setWebcamDeviceName] = useState<string | undefined>(undefined);
 	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
+	const [hideDesktopIcons, setHideDesktopIcons] = useState(false);
 	const [webcamEnabled, setWebcamEnabledState] = useState(false);
 	const [webcamPreviewStream, setWebcamPreviewStream] = useState<MediaStream | null>(null);
 	const [cursorCaptureMode, setCursorCaptureMode] = useState<CursorCaptureMode>("editable-overlay");
@@ -269,6 +274,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				setWebcamEnabledState(prefs.camEnabled);
 				if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
 				setSystemAudioEnabled(prefs.systemAudioEnabled);
+				setHideDesktopIcons(prefs.hideDesktopIcons);
 				setCursorCaptureMode(prefs.cursorCaptureMode);
 			})
 			.catch((err) => {
@@ -437,10 +443,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					video: webcamDeviceId
 						? {
 								deviceId: { exact: webcamDeviceId },
-								frameRate: { ideal: WEBCAM_TARGET_FRAME_RATE, max: WEBCAM_TARGET_FRAME_RATE },
+								frameRate: {
+									ideal: WEBCAM_TARGET_FRAME_RATE,
+									max: WEBCAM_TARGET_FRAME_RATE,
+								},
 							}
 						: {
-								frameRate: { ideal: WEBCAM_TARGET_FRAME_RATE, max: WEBCAM_TARGET_FRAME_RATE },
+								frameRate: {
+									ideal: WEBCAM_TARGET_FRAME_RATE,
+									max: WEBCAM_TARGET_FRAME_RATE,
+								},
 							},
 				});
 
@@ -771,6 +783,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					// of (issue #252).
 					clearNativeRecordingState();
 					return true;
+				}
+				if (result.audioHealth?.warning) {
+					toast.warning("Recording audio needs attention", {
+						description: result.audioHealth.warning,
+						duration: 12_000,
+					});
 				}
 
 				if (webcamResult.asset && result.path) {
@@ -1146,7 +1164,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const displayId = Number(selectedSource.display_id);
 			const sourceType = selectedSource.id.startsWith("window:") ? "window" : "display";
 			const windowHandle = parseWindowHandleFromSourceId(selectedSource.id);
-			let webcamIdentity = { deviceId: webcamDeviceId, deviceName: webcamDeviceName };
+			let webcamIdentity = {
+				deviceId: webcamDeviceId,
+				deviceName: webcamDeviceName,
+			};
 			if (webcamEnabled) {
 				await waitForWebcamReady();
 				if (!isCountdownRunActive(countdownRunToken)) {
@@ -1331,6 +1352,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					sourceId: selectedSource.id,
 					...(displayId ? { displayId } : {}),
 					...(windowId ? { windowId } : {}),
+					...(sourceType === "display" ? { hideDesktopIcons } : {}),
 				},
 				video: {
 					fps: TARGET_FRAME_RATE,
@@ -1950,7 +1972,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					mimeType,
 					videoBitsPerSecond,
 					...(hasAudio
-						? { audioBitsPerSecond: systemAudioTrack ? AUDIO_BITRATE_SYSTEM : AUDIO_BITRATE_VOICE }
+						? {
+								audioBitsPerSecond: systemAudioTrack ? AUDIO_BITRATE_SYSTEM : AUDIO_BITRATE_VOICE,
+							}
 						: {}),
 				},
 				`${RECORDING_FILE_PREFIX}${activeRecordingId}${VIDEO_FILE_EXTENSION}`,
@@ -1966,7 +1990,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			if (webcamStream.current) {
 				webcamRecorder.current = createRecorderHandle(
 					webcamStream.current,
-					{ mimeType, videoBitsPerSecond: Math.min(videoBitsPerSecond, BITRATE_BASE) },
+					{
+						mimeType,
+						videoBitsPerSecond: Math.min(videoBitsPerSecond, BITRATE_BASE),
+					},
 					`${RECORDING_FILE_PREFIX}${activeRecordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
 				);
 			}
@@ -2352,6 +2379,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		setWebcamDeviceName,
 		systemAudioEnabled,
 		setSystemAudioEnabled,
+		hideDesktopIcons,
+		setHideDesktopIcons,
 		webcamEnabled,
 		webcamPreviewStream,
 		setWebcamEnabled,

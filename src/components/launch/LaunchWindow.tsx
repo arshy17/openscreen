@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+	type CSSProperties,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { getAvailableLocales, getLocaleName } from "@/i18n/loader";
 import {
@@ -16,6 +24,7 @@ import { requestCameraAccess } from "../../lib/requestCameraAccess";
 import {
 	HudCameraButton,
 	HudCursorButton,
+	HudDesktopIconsButton,
 	HudDivider,
 	HudDragHandle,
 	HudLanguageButton,
@@ -104,6 +113,8 @@ export function LaunchWindow() {
 		setMicrophoneDeviceName,
 		systemAudioEnabled,
 		setSystemAudioEnabled,
+		hideDesktopIcons,
+		setHideDesktopIcons,
 		webcamEnabled,
 		webcamPreviewStream,
 		setWebcamEnabled,
@@ -138,16 +149,26 @@ export function LaunchWindow() {
 		},
 	);
 	const [supportsCursorModeToggle, setSupportsCursorModeToggle] = useState(false);
+	const [supportsDesktopIconHiding, setSupportsDesktopIconHiding] = useState(false);
 	const [isLinuxHud, setIsLinuxHud] = useState(false);
 	// The running version, and whether this copy may offer an update check at all — a
 	// Store/Flathub/Snap/Nix install is kept current by its package manager and is offered
 	// nothing (electron/install-channel.ts). Asked once: neither answer changes while the app
 	// runs, and the HUD is rebuilt for every recording anyway.
-	const [appInfo, setAppInfo] = useState<{ version: string; canCheckForUpdates: boolean } | null>(
-		null,
-	);
+	const [appInfo, setAppInfo] = useState<{
+		version: string;
+		canCheckForUpdates: boolean;
+	} | null>(null);
 	const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false);
 	const [webcamSelfViewOffset, setWebcamSelfViewOffset] = useState<HudWebcamOffset | null>(null);
+	// A camera-enabled HUD uses one work-area-sized transparent BrowserWindow so
+	// the self-view can be dragged to every corner. The native window must stay
+	// pinned there; this offset lets the visible control stack move independently
+	// inside that surface. Compact mode keeps using native window movement.
+	const [hudSurfaceOffset, setHudSurfaceOffset] = useState<HudWebcamOffset>({
+		x: 0,
+		y: 0,
+	});
 	/**
 	 * Narrower than [`isLinuxHud`] on purpose: without the helper the recorder
 	 * falls back to Chromium's capture, which DOES take a source id, so the
@@ -245,12 +266,14 @@ export function LaunchWindow() {
 						platform === "win32" || platform === "darwin" || platform === "linux",
 					);
 					setIsLinuxHud(platform === "linux");
+					setSupportsDesktopIconHiding(platform === "darwin");
 				}
 			})
 			.catch(() => {
 				if (!cancelled) {
 					setSupportsCursorModeToggle(false);
 					setIsLinuxHud(false);
+					setSupportsDesktopIconHiding(false);
 				}
 			});
 
@@ -363,7 +386,11 @@ export function LaunchWindow() {
 	//      screen.availHeight (which a window resize can't change) and are pushed
 	//      down as CSS custom properties.
 	// ---------------------------------------------------------------------------
-	const hudAllocatedSizeRef = useRef({ width: 0, height: 0, orientation: trayLayout });
+	const hudAllocatedSizeRef = useRef({
+		width: 0,
+		height: 0,
+		orientation: trayLayout,
+	});
 	const isDraggingHudRef = useRef(false);
 
 	useLayoutEffect(() => {
@@ -537,6 +564,7 @@ export function LaunchWindow() {
 	const defaultSourceName = t("sourceSelector.defaultSourceName");
 	const [selectedSource, setSelectedSource] = useState(defaultSourceName);
 	const [hasSelectedSource, setHasSelectedSource] = useState(false);
+	const [selectedSourceIsWindow, setSelectedSourceIsWindow] = useState(false);
 	const recordAfterSourceSelectionRef = useRef(false);
 
 	const applySelectedSource = useCallback(
@@ -544,11 +572,13 @@ export function LaunchWindow() {
 			if (source) {
 				setSelectedSource(source.name);
 				setHasSelectedSource(true);
+				setSelectedSourceIsWindow(source.id.startsWith("window:"));
 				return;
 			}
 
 			setSelectedSource(defaultSourceName);
 			setHasSelectedSource(false);
+			setSelectedSourceIsWindow(false);
 		},
 		[defaultSourceName],
 	);
@@ -738,6 +768,7 @@ export function LaunchWindow() {
 			camDeviceId?: string;
 			micDeviceId?: string;
 			micDeviceName?: string;
+			hideDesktopIcons?: boolean;
 		}) => {
 			void window.electronAPI?.setRecordingPrefs?.(patch).catch((error) => {
 				console.warn("Failed to persist the device preference:", error);
@@ -745,6 +776,19 @@ export function LaunchWindow() {
 		},
 		[],
 	);
+
+	const toggleDesktopIconsInRecording = useCallback(() => {
+		if (controlsLocked || selectedSourceIsWindow) return;
+		const next = !hideDesktopIcons;
+		setHideDesktopIcons(next);
+		persistRecordingPrefs({ hideDesktopIcons: next });
+	}, [
+		controlsLocked,
+		hideDesktopIcons,
+		persistRecordingPrefs,
+		selectedSourceIsWindow,
+		setHideDesktopIcons,
+	]);
 
 	const toggleWebcam = useCallback(() => {
 		if (controlsLocked) return;
@@ -762,7 +806,10 @@ export function LaunchWindow() {
 			setSelectedMicId(device.deviceId);
 			setMicrophoneDeviceId(device.deviceId);
 			setMicrophoneDeviceName(device.label);
-			persistRecordingPrefs({ micDeviceId: device.deviceId, micDeviceName: device.label });
+			persistRecordingPrefs({
+				micDeviceId: device.deviceId,
+				micDeviceName: device.label,
+			});
 		},
 		[persistRecordingPrefs, setMicrophoneDeviceId, setMicrophoneDeviceName, setSelectedMicId],
 	);
@@ -837,7 +884,22 @@ export function LaunchWindow() {
 	// — pointermove is already delivered at most once per frame, so the rAF only
 	// ever added a frame of latency to a gesture the user is watching.
 	// ---------------------------------------------------------------------------
-	const dragOriginRef = useRef<{ x: number; y: number } | null>(null);
+	const dragOriginRef = useRef<
+		| {
+				x: number;
+				y: number;
+				mode: "window";
+		  }
+		| {
+				x: number;
+				y: number;
+				mode: "surface";
+				offset: HudWebcamOffset;
+				cameraOffset: HudWebcamOffset;
+				bar: { left: number; top: number; width: number; height: number };
+		  }
+		| null
+	>(null);
 	const lastDragDeltaRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
 	const handleHudDragPointerDown = useCallback(
@@ -846,12 +908,33 @@ export function LaunchWindow() {
 			event.stopPropagation();
 			setHudMouseEventsEnabled(true);
 			event.currentTarget.setPointerCapture(event.pointerId);
-			dragOriginRef.current = { x: event.screenX, y: event.screenY };
+			const barRect = hudBarRef.current?.getBoundingClientRect();
+			if (webcamEnabled && barRect) {
+				dragOriginRef.current = {
+					x: event.screenX,
+					y: event.screenY,
+					mode: "surface",
+					offset: hudSurfaceOffset,
+					cameraOffset: webcamSelfViewOffset ?? { x: 0, y: 0 },
+					bar: {
+						left: barRect.left,
+						top: barRect.top,
+						width: barRect.width,
+						height: barRect.height,
+					},
+				};
+			} else {
+				dragOriginRef.current = {
+					x: event.screenX,
+					y: event.screenY,
+					mode: "window",
+				};
+				window.electronAPI?.beginHudOverlayDrag?.();
+			}
 			lastDragDeltaRef.current = { x: 0, y: 0 };
 			isDraggingHudRef.current = true;
-			window.electronAPI?.beginHudOverlayDrag?.();
 		},
-		[setHudMouseEventsEnabled],
+		[hudSurfaceOffset, setHudMouseEventsEnabled, webcamEnabled, webcamSelfViewOffset],
 	);
 
 	const handleHudDragPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -862,18 +945,39 @@ export function LaunchWindow() {
 		const last = lastDragDeltaRef.current;
 		if (last.x === deltaX && last.y === deltaY) return;
 		lastDragDeltaRef.current = { x: deltaX, y: deltaY };
+		if (origin.mode === "surface") {
+			const maxLeft = Math.max(0, window.innerWidth - origin.bar.width);
+			const maxTop = Math.max(0, window.innerHeight - origin.bar.height);
+			const nextLeft = Math.min(maxLeft, Math.max(0, origin.bar.left + deltaX));
+			const nextTop = Math.min(maxTop, Math.max(0, origin.bar.top + deltaY));
+			const nextOffset = {
+				x: origin.offset.x + nextLeft - origin.bar.left,
+				y: origin.offset.y + nextTop - origin.bar.top,
+			};
+			setHudSurfaceOffset(nextOffset);
+			// The self-view shares the anchor for its convenient default placement,
+			// but is independently draggable. Counter-translate it by the anchor's
+			// movement so moving the controls never pulls a carefully placed camera
+			// away from a screen corner.
+			setWebcamSelfViewOffset({
+				x: origin.cameraOffset.x - (nextOffset.x - origin.offset.x),
+				y: origin.cameraOffset.y - (nextOffset.y - origin.offset.y),
+			});
+			return;
+		}
 		window.electronAPI?.dragHudOverlayTo?.(deltaX, deltaY);
 	}, []);
 
 	const handleHudDragPointerEnd = useCallback(
 		(event: React.PointerEvent<HTMLDivElement>) => {
-			if (!dragOriginRef.current) return;
+			const origin = dragOriginRef.current;
+			if (!origin) return;
 			dragOriginRef.current = null;
 			if (event.currentTarget.hasPointerCapture(event.pointerId)) {
 				event.currentTarget.releasePointerCapture(event.pointerId);
 			}
 			isDraggingHudRef.current = false;
-			window.electronAPI?.endHudOverlayDrag?.();
+			if (origin.mode === "window") window.electronAPI?.endHudOverlayDrag?.();
 			measureHudSize();
 		},
 		[measureHudSize],
@@ -957,6 +1061,10 @@ export function LaunchWindow() {
 	const showWebcamSelfView = webcamEnabled && !isDeviceSettingsOpen;
 
 	useEffect(() => {
+		if (!webcamEnabled) {
+			setHudSurfaceOffset({ x: 0, y: 0 });
+			setWebcamSelfViewOffset(null);
+		}
 		window.electronAPI?.setHudOverlayExpanded?.(webcamEnabled);
 		return () => window.electronAPI?.setHudOverlayExpanded?.(false);
 	}, [webcamEnabled]);
@@ -979,7 +1087,17 @@ export function LaunchWindow() {
 			{/* One bottom-anchored stack: the bar, then whatever floats above it.
 			    Everything is laid out by flexbox relative to the bar, so no popover
 			    needs a measured position and none of them can move the window. */}
-			<div ref={hudAnchorRef} className={styles.hudAnchor}>
+			<div
+				ref={hudAnchorRef}
+				data-testid="hud-anchor"
+				className={styles.hudAnchor}
+				style={
+					{
+						"--hud-drag-x": `${hudSurfaceOffset.x}px`,
+						"--hud-drag-y": `${hudSurfaceOffset.y}px`,
+					} as CSSProperties
+				}
+			>
 				<div
 					ref={setHudBarEl}
 					data-hud-interactive="true"
@@ -992,7 +1110,9 @@ export function LaunchWindow() {
 				>
 					<HudDragHandle
 						vertical={isVertical}
-						nativeDrag={isLinuxHud}
+						// A native drag would move the work-area-sized window while the
+						// camera is on. Use the in-surface pointer path on every platform.
+						nativeDrag={isLinuxHud && !webcamEnabled}
 						onPointerDown={handleHudDragPointerDown}
 						onPointerMove={handleHudDragPointerMove}
 						onPointerEnd={handleHudDragPointerEnd}
@@ -1072,6 +1192,16 @@ export function LaunchWindow() {
 									: t("cursor.useEditableCursor")
 							}
 							onClick={toggleCursorMode}
+						/>
+					)}
+					{supportsDesktopIconHiding && (
+						<HudDesktopIconsButton
+							enabled={hideDesktopIcons}
+							disabled={controlsLocked || !hasSelectedSource || selectedSourceIsWindow}
+							label={
+								hideDesktopIcons ? t("tooltips.showDesktopIcons") : t("tooltips.hideDesktopIcons")
+							}
+							onClick={toggleDesktopIconsInRecording}
 						/>
 					)}
 
@@ -1154,6 +1284,7 @@ export function LaunchWindow() {
 								searchingLabel={deviceSettingsLabels.searching}
 								position={webcamSelfViewOffset}
 								onPositionChange={setWebcamSelfViewOffset}
+								onSizeChange={(size) => handleWebcamAppearanceChange({ size })}
 								appearance={webcamPreviewAppearance}
 							/>
 						)}

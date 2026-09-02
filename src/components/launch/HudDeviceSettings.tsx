@@ -1,6 +1,11 @@
 import { Check, X } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
-import type { WebcamPreviewAppearance, WebcamPreviewShape } from "@/lib/userPreferences";
+import {
+	MAX_WEBCAM_PREVIEW_SIZE,
+	MIN_WEBCAM_PREVIEW_SIZE,
+	type WebcamPreviewAppearance,
+	type WebcamPreviewShape,
+} from "@/lib/userPreferences";
 import { useAudioLevelMeter } from "../../hooks/useAudioLevelMeter";
 import type { CameraDevice } from "../../hooks/useCameraDevices";
 import { useCameraPreviewStream } from "../../hooks/useCameraPreviewStream";
@@ -294,8 +299,8 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 				<input
 					id="webcam-preview-size"
 					type="range"
-					min={160}
-					max={320}
+					min={MIN_WEBCAM_PREVIEW_SIZE}
+					max={MAX_WEBCAM_PREVIEW_SIZE}
 					step={10}
 					value={appearance.size}
 					onChange={(event) => onAppearanceChange({ size: Number(event.target.value) })}

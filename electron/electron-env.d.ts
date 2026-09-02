@@ -177,10 +177,14 @@ interface Window {
 			success: boolean;
 			path?: string;
 			session?: import("../src/lib/recordingSession").RecordingSession;
+			audioHealth?: import("../src/lib/nativeMacRecording").NativeMacAudioHealth;
 			message?: string;
 			discarded?: boolean;
 			error?: string;
 		}>;
+		analyzePrivacyVision: (
+			request: import("../src/lib/ai-edition/privacyVision").PrivacyVisionScanRequest,
+		) => Promise<import("../src/lib/ai-edition/privacyVision").PrivacyVisionScanResponse>;
 		attachNativeMacWebcamRecording: (payload: {
 			screenVideoPath: string;
 			recordingId: number;
@@ -288,6 +292,14 @@ interface Window {
 			// the shim carries the picked File's real name here for the label.
 			name?: string;
 			canceled?: boolean;
+		}>;
+		openAudioFilePicker: () => Promise<{
+			success: boolean;
+			path?: string;
+			name?: string;
+			canceled?: boolean;
+			message?: string;
+			error?: string;
 		}>;
 		setCurrentVideoPath: (path: string) => Promise<{ success: boolean }>;
 		setCurrentRecordingSession: (

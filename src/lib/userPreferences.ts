@@ -42,6 +42,14 @@ export interface UserPreferences {
 	hideSoftwareEncoderFallbackNotice: boolean;
 }
 
+// The live self-view is displayed in CSS pixels. 160px was too large on Retina
+// displays (where screenshots contain roughly twice as many physical pixels),
+// so a user who had reached the old slider floor still saw a dominant camera
+// bubble. Keep these bounds shared by persistence and the HUD control so a
+// value the UI can create is never rejected the next time the app starts.
+export const MIN_WEBCAM_PREVIEW_SIZE = 80;
+export const MAX_WEBCAM_PREVIEW_SIZE = 320;
+
 export const DEFAULT_PREFS: UserPreferences = {
 	padding: DEFAULT_EDITOR_LAYOUT_SETTINGS.padding,
 	aspectRatio: DEFAULT_EDITOR_LAYOUT_SETTINGS.aspectRatio,
@@ -118,8 +126,8 @@ export function loadUserPreferences(): UserPreferences {
 		webcamPreviewSize:
 			typeof raw.webcamPreviewSize === "number" &&
 			Number.isFinite(raw.webcamPreviewSize) &&
-			raw.webcamPreviewSize >= 160 &&
-			raw.webcamPreviewSize <= 320
+			raw.webcamPreviewSize >= MIN_WEBCAM_PREVIEW_SIZE &&
+			raw.webcamPreviewSize <= MAX_WEBCAM_PREVIEW_SIZE
 				? raw.webcamPreviewSize
 				: DEFAULT_PREFS.webcamPreviewSize,
 		webcamPreviewShape:

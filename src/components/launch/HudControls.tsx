@@ -1,4 +1,4 @@
-import { Check, Languages, NotepadText, Settings } from "lucide-react";
+import { Check, EyeOff, Languages, NotepadText, Settings } from "lucide-react";
 import { memo } from "react";
 import { formatTimePadded } from "../../utils/timeUtils";
 import { Button } from "../ui/button";
@@ -278,6 +278,34 @@ export const HudCursorButton = memo(function HudCursorButton({
 		>
 			<CursorIcon />
 		</button>
+	);
+});
+
+export const HudDesktopIconsButton = memo(function HudDesktopIconsButton({
+	enabled,
+	disabled,
+	label,
+	onClick,
+}: {
+	enabled: boolean;
+	disabled: boolean;
+	label: string;
+	onClick: () => void;
+}) {
+	return (
+		<Tooltip content={label}>
+			<button
+				type="button"
+				data-testid="launch-hide-desktop-icons-button"
+				aria-label={label}
+				aria-pressed={enabled}
+				className={`${hudIconBtnClasses} ${enabled ? "bg-[#10b981] text-[#08090d] hover:bg-[#0e9e6e]" : ""}`}
+				onClick={onClick}
+				disabled={disabled}
+			>
+				<EyeOff size={17} />
+			</button>
+		</Tooltip>
 	);
 });
 

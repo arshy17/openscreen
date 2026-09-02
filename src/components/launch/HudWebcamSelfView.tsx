@@ -1,5 +1,9 @@
 import { memo, useEffect, useRef, useState } from "react";
-import type { WebcamPreviewAppearance } from "@/lib/userPreferences";
+import {
+	MAX_WEBCAM_PREVIEW_SIZE,
+	MIN_WEBCAM_PREVIEW_SIZE,
+	type WebcamPreviewAppearance,
+} from "@/lib/userPreferences";
 import styles from "./LaunchWindow.module.css";
 
 export interface HudWebcamOffset {
@@ -32,6 +36,7 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 	searchingLabel,
 	position,
 	onPositionChange,
+	onSizeChange,
 	appearance,
 }: {
 	stream: MediaStream | null;
@@ -40,6 +45,7 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 	searchingLabel: string;
 	position: HudWebcamOffset | null;
 	onPositionChange: (position: HudWebcamOffset | null) => void;
+	onSizeChange: (size: number) => void;
 	appearance: WebcamPreviewAppearance;
 }) {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -55,7 +61,14 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 		baseLeft: number;
 		baseTop: number;
 	} | null>(null);
+	const resizeRef = useRef<{
+		pointerId: number;
+		startX: number;
+		startY: number;
+		originSize: number;
+	} | null>(null);
 	const [dragging, setDragging] = useState(false);
+	const [resizing, setResizing] = useState(false);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -66,6 +79,9 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 		};
 	}, [stream]);
 
+	// Re-run after shape or size changes even though those values affect the
+	// measured DOM box rather than being read directly inside this effect.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: preview dimensions must trigger a viewport re-clamp
 	useEffect(() => {
 		if (!position) return;
 		const keepInsideViewport = () => {
@@ -79,9 +95,10 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 				});
 			}
 		};
+		keepInsideViewport();
 		window.addEventListener("resize", keepInsideViewport);
 		return () => window.removeEventListener("resize", keepInsideViewport);
-	}, [onPositionChange, position]);
+	}, [appearance.shape, appearance.size, onPositionChange, position]);
 
 	const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
 		if (event.button !== 0) return;
@@ -137,12 +154,57 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 		setDragging(false);
 	};
 
+	const handleResizeStart = (event: React.PointerEvent<HTMLButtonElement>) => {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		event.stopPropagation();
+		resizeRef.current = {
+			pointerId: event.pointerId,
+			startX: event.clientX,
+			startY: event.clientY,
+			originSize: appearance.size,
+		};
+		event.currentTarget.setPointerCapture?.(event.pointerId);
+		setResizing(true);
+	};
+
+	const handleResizeMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+		const resize = resizeRef.current;
+		if (!resize || resize.pointerId !== event.pointerId) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const aspect = appearance.shape === "circle" || appearance.shape === "square" ? 1 : 16 / 9;
+		const delta = Math.max(event.clientX - resize.startX, (event.clientY - resize.startY) * aspect);
+		const viewportMaximum = Math.min(window.innerWidth, window.innerHeight * aspect);
+		const size = Math.round(
+			Math.min(
+				MAX_WEBCAM_PREVIEW_SIZE,
+				viewportMaximum,
+				Math.max(MIN_WEBCAM_PREVIEW_SIZE, resize.originSize + delta),
+			),
+		);
+		onSizeChange(size);
+	};
+
+	const handleResizeEnd = (event: React.PointerEvent<HTMLButtonElement>) => {
+		const resize = resizeRef.current;
+		if (!resize || resize.pointerId !== event.pointerId) return;
+		event.preventDefault();
+		event.stopPropagation();
+		resizeRef.current = null;
+		if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+			event.currentTarget.releasePointerCapture(event.pointerId);
+		}
+		setResizing(false);
+	};
+
 	return (
 		<div
 			ref={selfViewRef}
 			data-testid="hud-webcam-self-view"
 			data-recording={recording ? "true" : "false"}
 			data-dragging={dragging ? "true" : "false"}
+			data-resizing={resizing ? "true" : "false"}
 			data-hud-interactive="true"
 			data-shape={appearance.shape}
 			className={styles.hudWebcamSelfView}
@@ -178,6 +240,16 @@ export const HudWebcamSelfView = memo(function HudWebcamSelfView({
 			<span className={styles.hudWebcamDragAffordance} aria-hidden="true">
 				•••
 			</span>
+			<button
+				type="button"
+				className={styles.hudWebcamResizeHandle}
+				aria-label="Resize camera preview"
+				title="Drag to resize camera preview"
+				onPointerDown={handleResizeStart}
+				onPointerMove={handleResizeMove}
+				onPointerUp={handleResizeEnd}
+				onPointerCancel={handleResizeEnd}
+			/>
 		</div>
 	);
 });

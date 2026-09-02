@@ -21,8 +21,13 @@
  */
 .hudAnchor {
 	position: fixed;
-	bottom: var(--hud-bar-bottom, 20px);
-	left: 50%;
+	/* While the camera is enabled the native window fills the display so the
+	   self-view can reach every corner. Moving that native window would move the
+	   whole display-sized hit surface, so the grab handle translates this anchor
+	   inside it instead. In compact mode both offsets stay zero and native window
+	   dragging continues to own the position. */
+	bottom: calc(var(--hud-bar-bottom, 20px) - var(--hud-drag-y, 0px));
+	left: calc(50% + var(--hud-drag-x, 0px));
 	transform: translateX(-50%);
 	display: flex;
 	flex-direction: column-reverse;
@@ -393,6 +398,35 @@
 .hudWebcamSelfView:hover .hudWebcamDragAffordance,
 .hudWebcamSelfView[data-dragging="true"] .hudWebcamDragAffordance {
 	opacity: 1;
+}
+
+.hudWebcamResizeHandle {
+	position: absolute;
+	right: 4px;
+	bottom: 4px;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 8px 2px 8px 2px;
+	background:
+		linear-gradient(135deg, transparent 42%, rgba(255, 255, 255, 0.82) 43% 51%, transparent 52%),
+		linear-gradient(135deg, transparent 62%, rgba(255, 255, 255, 0.55) 63% 71%, transparent 72%);
+	opacity: 0;
+	cursor: nwse-resize;
+	touch-action: none;
+	transition: opacity 120ms ease;
+}
+
+.hudWebcamSelfView:hover .hudWebcamResizeHandle,
+.hudWebcamSelfView[data-resizing="true"] .hudWebcamResizeHandle,
+.hudWebcamResizeHandle:focus-visible {
+	opacity: 1;
+}
+
+.hudWebcamResizeHandle:focus-visible {
+	outline: 2px solid #34d399;
+	outline-offset: 1px;
 }
 
 .webcamAppearanceControl {

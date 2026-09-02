@@ -19,6 +19,9 @@ struct RecordingRequest: Decodable {
 		let displayId: UInt32?
 		let windowId: UInt32?
 		let bounds: Rectangle?
+		let excludedProcessIds: [Int32]?
+		let excludedWindowIds: [UInt32]?
+		let hideDesktopIcons: Bool?
 	}
 
 	struct Video: Decodable {
@@ -148,7 +151,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		try ensureRequestedPermissions()
 
 		let content = try await SCShareableContent.excludingDesktopWindows(
-			false,
+			request.source.hideDesktopIcons ?? false,
 			onScreenWindowsOnly: true
 		)
 		let target = try makeCaptureTarget(from: content)
@@ -387,7 +390,26 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			guard let display = content.displays.first(where: { $0.displayID == displayId }) else {
 				throw HelperError.sourceNotFound("No ScreenCaptureKit display found for id \(displayId).")
 			}
-			let filter = SCContentFilter(display: display, excludingWindows: [])
+			let excludedProcessIds = Set(request.source.excludedProcessIds ?? [])
+			let excludedApplications = content.applications.filter {
+				excludedProcessIds.contains($0.processID)
+			}
+			let excludedWindowIds = Set(request.source.excludedWindowIds ?? [])
+			let excludedWindows = content.windows.filter {
+				excludedWindowIds.contains($0.windowID)
+			}
+
+			// Prefer excluding the whole Electron process. That also keeps any Notes,
+			// HUD or self-view window opened after capture begins out of the video.
+			// Some macOS versions omit an application from SCShareableContent even
+			// while its window is listed, so fall back to the exact native window ids.
+			let filter = excludedApplications.isEmpty
+				? SCContentFilter(display: display, excludingWindows: excludedWindows)
+				: SCContentFilter(
+					display: display,
+					excludingApplications: excludedApplications,
+					exceptingWindows: []
+				)
 			let size = captureSize(
 				for: filter,
 				fallbackPointSize: display.frame.size,
@@ -782,22 +804,33 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
 	private func resolveMicrophoneCaptureDeviceID() -> String? {
 		let devices = AVCaptureDevice.devices(for: .audio)
-
-		if let deviceName = request.audio.microphone.deviceName?.trimmingCharacters(in: .whitespacesAndNewlines),
-			!deviceName.isEmpty,
-			let device = devices.first(where: { $0.localizedName == deviceName })
-		{
-			return device.uniqueID
+		let candidates = devices.map {
+			MicrophoneCaptureDevice(
+				uniqueID: $0.uniqueID,
+				localizedName: $0.localizedName,
+				modelID: $0.modelID
+			)
+		}
+		guard let selected = preferredMicrophoneCaptureDevice(
+			requestedID: request.audio.microphone.deviceId,
+			requestedName: request.audio.microphone.deviceName,
+			candidates: candidates
+		) else {
+			emit([
+				"event": "warning",
+				"code": "microphone-device-unresolved",
+				"message": "The selected microphone could not be mapped to an AVFoundation device; using the system default input.",
+			])
+			return nil
 		}
 
-		if let deviceId = request.audio.microphone.deviceId?.trimmingCharacters(in: .whitespacesAndNewlines),
-			!deviceId.isEmpty,
-			devices.contains(where: { $0.uniqueID == deviceId })
-		{
-			return deviceId
-		}
-
-		return nil
+		emit([
+			"event": "microphone-device-selected",
+			"requestedName": request.audio.microphone.deviceName ?? "",
+			"resolvedName": selected.localizedName,
+			"resolvedDeviceID": selected.uniqueID,
+		])
+		return selected.uniqueID
 	}
 }
 
