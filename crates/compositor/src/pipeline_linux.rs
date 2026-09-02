@@ -21,9 +21,9 @@ use std::ffi::CString;
 use std::ptr;
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_program_audio,
-    stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
+    assemble_concatenated_pcm, build_audio_concat_plan, finish_program_audio, AacEncoder, PlanarPcm,
 };
+use crate::audio_jobs::{decode_and_stretch_clip_audio, ClipAudioJobs};
 use crate::config::Cfg;
 use crate::d3d::Gpu;
 use crate::ffi::AVFrame;
@@ -350,6 +350,50 @@ impl VideoEncoder {
         averr(avcodec_send_frame(self.ctx, self.sw), "send_frame")
     }
 
+    /// Envoie une frame deja en YUV420P, convertie par le GPU.
+    ///
+    /// Remplace `send_rgba` sur le chemin d'export : plus de `sws_scale`, et le
+    /// buffer relu fait 3,1 Mo au lieu de 8,3 en 1080p. Le seul travail CPU qui
+    /// reste est de retirer le padding des trois plans — `copy_texture_to_buffer`
+    /// aligne chaque `bytes_per_row` sur 256, donc en 1080p Y arrive en 2048 pour
+    /// 1920 utiles et U/V en 1024 pour 960.
+    pub unsafe fn send_yuv420p(&mut self, planes: &[u8], rw: i32, rh: i32, pts: i64) -> Result<()> {
+        use crate::ffi::*;
+        if rw != self.w || rh != self.h {
+            bail!("send_yuv420p {rw}x{rh} != encodeur {}x{}", self.w, self.h);
+        }
+        let (w, h) = (rw as usize, rh as usize);
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+        let bpr_y = w.div_ceil(256) * 256;
+        let bpr_uv = cw.div_ceil(256) * 256;
+        let off_u = bpr_y * h;
+        let off_v = off_u + bpr_uv * ch;
+        if planes.len() < off_v + bpr_uv * ch {
+            bail!("plans YUV tronques : {} octets", planes.len());
+        }
+
+        averr(av_frame_make_writable(self.sw), "make_writable")?;
+        // Ligne a ligne parce que les deux strides different : celui du GPU est
+        // aligne a 256, celui de l'AVFrame a ce que ffmpeg a choisi.
+        for (plane, src_off, src_stride, pw, ph) in [
+            (0usize, 0usize, bpr_y, w, h),
+            (1, off_u, bpr_uv, cw, ch),
+            (2, off_v, bpr_uv, cw, ch),
+        ] {
+            let dst = (*self.sw).data[plane];
+            let dst_stride = (*self.sw).linesize[plane] as usize;
+            for y in 0..ph {
+                std::ptr::copy_nonoverlapping(
+                    planes.as_ptr().add(src_off + y * src_stride),
+                    dst.add(y * dst_stride),
+                    pw,
+                );
+            }
+        }
+        (*self.sw).pts = pts;
+        averr(avcodec_send_frame(self.ctx, self.sw), "send_frame")
+    }
+
     /// Flush : une frame nulle finalise le bitstream de l'encodeur.
     pub unsafe fn flush(&mut self) -> Result<()> {
         crate::ffi::averr(
@@ -493,7 +537,7 @@ pub fn run_composited_multi(
 
     // Un PCM par clip, assemble apres la marche video (elle seule dit combien de
     // frames chaque clip a produit, donc combien d'audio lui revient).
-    let mut clip_pcm: Vec<Option<PlanarPcm>> = (0..clips.len()).map(|_| None).collect();
+    let mut audio_jobs: ClipAudioJobs<Option<PlanarPcm>> = ClipAudioJobs::new(clips.len());
     let mut clip_frame_counts: Vec<u64> = vec![0; clips.len()];
 
     let scene = comp.scene_snapshot();
@@ -504,7 +548,7 @@ pub fn run_composited_multi(
     // Ring de staging a 2 : l'export ne veut que du debit, une frame de latence
     // ne se voit pas dans un fichier. Voir `Compositor::set_readback_depth` pour
     // la raison pour laquelle la preview, elle, reste a 1.
-    comp.set_readback_depth(2)?;
+    comp.set_readback_yuv_depth(2)?;
     // pts d'encodage : DECOUPLE de l'index de marche `n`, puisque la frame
     // recoltee a l'iteration n est celle composee a n-1. Il reste contigu (les
     // frames sortent de la ring dans l'ordre de composition), donc le fichier
@@ -523,10 +567,10 @@ pub fn run_composited_multi(
             &mut |n| {
                 // Soumet la copie de la frame n SANS l'attendre et recolte la
                 // precedente : c'est tout le pipelining. Pendant que le CPU
-                // passe ses ~12,6 ms dans sws_scale + avcodec_send_frame sur la
-                // frame n-1, le GPU finit la composition et la copie de n.
-                if let Some((rw, rh, rgba)) = comp.readback_submit()? {
-                    enc.send_rgba(&rgba, rw as i32, rh as i32, encoded_pts)?;
+                // passe son temps dans `avcodec_send_frame` sur la frame n-1,
+                // le GPU finit la composition, la conversion YUV et la copie de n.
+                if let Some((rw, rh, planes)) = comp.readback_submit_yuv()? {
+                    enc.send_yuv420p(&planes, rw as i32, rh as i32, encoded_pts)?;
                     encoded_pts += 1;
                     drain_encoder(ectx, octx, ostream, opkt)?;
                 }
@@ -540,18 +584,24 @@ pub fn run_composited_multi(
                 clip_frame_counts[clip_index] = frames_in_clip;
                 let clip = &clips[clip_index];
                 if clip.has_audio && frames_in_clip > 0 {
-                    match decode_clip_audio(&clip.screen, clip.source_start_sec, source_end_sec) {
-                        Ok(Some(pcm)) => {
-                            clip_pcm[clip_index] =
-                                Some(stretch_clip_pcm_by_speed(&pcm, speed_segments, out_fps as f64));
-                        }
-                        Ok(None) => eprintln!(
-                            "[pipeline] warning: clip #{clip_index} declare audio mais sans flux decodable; silence",
-                        ),
-                        Err(error) => eprintln!(
-                            "[pipeline] warning: decodage audio clip #{clip_index} echoue ({error:#}); silence",
-                        ),
-                    }
+                    // L'audio d'un clip ne dépend que de ce clip : le décoder et l'étirer ici,
+                    // sur le thread de rendu, immobilisait la barre d'export pour toute sa
+                    // durée — rien n'appelle `progress()` entre deux clips. Le travail part
+                    // sur un thread et se recouvre avec la composition du clip suivant ; les
+                    // résultats sont récupérés après le parcours, rangés par index de clip.
+                    let path = clip.screen.clone();
+                    let source_start_sec = clip.source_start_sec;
+                    let segments = speed_segments.to_vec();
+                    audio_jobs.spawn(clip_index, move || {
+                        decode_and_stretch_clip_audio(
+                            clip_index,
+                            &path,
+                            source_start_sec,
+                            source_end_sec,
+                            &segments,
+                            out_fps as f64,
+                        )
+                    });
                 }
                 Ok(())
             },
@@ -562,19 +612,29 @@ pub fn run_composited_multi(
         // Drain de la ring AVANT le flush de l'encodeur : les `depth - 1`
         // dernieres copies sont encore en vol, et sans ce drain la derniere
         // frame composee ne serait jamais encodee (video amputee d'une frame).
-        while let Some((rw, rh, rgba)) = comp.readback_take()? {
-            enc.send_rgba(&rgba, rw as i32, rh as i32, encoded_pts)?;
+        while let Some((rw, rh, planes)) = comp.readback_take_yuv()? {
+            enc.send_yuv420p(&planes, rw as i32, rh as i32, encoded_pts)?;
             encoded_pts += 1;
             drain_encoder(ectx, octx, ostream, opkt)?;
         }
         // Le compositeur peut survivre a l'export (l'appelant le possede) : on
         // lui rend sa profondeur par defaut plutot que de lui laisser une ring
         // a 2 et le buffer de 8 Mo qui va avec.
-        comp.set_readback_depth(1)?;
+        comp.set_readback_yuv_depth(1)?;
         enc.flush()?;
         drain_encoder(ectx, octx, ostream, opkt)?;
         // Audio : le plan part des frames REELLEMENT produites par clip (un clip
         // raccourci voit son audio raccourci d'autant), puis un seul encode AAC.
+        // Récupération des jobs audio lancés pendant le parcours. `spawn` en admet quatre
+        // avant d'en collecter un, donc il en reste au plus quatre à attendre ici — bornés
+        // par le plus lent, pas par leur somme ; les autres se sont recouverts avec
+        // l'encodage vidéo.
+        let clip_pcm: Vec<Option<PlanarPcm>> = audio_jobs
+            .into_results()
+            .into_iter()
+            .map(|slot| slot.flatten())
+            .collect();
+
         let declared_audio: Vec<bool> = clips.iter().map(|c| c.has_audio).collect();
         let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
         audio_encoder.encode(
