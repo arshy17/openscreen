@@ -19,6 +19,7 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioLevelMeter } from "@/hooks/useAudioLevelMeter";
 import { useCameraDevices } from "@/hooks/useCameraDevices";
 import { useCameraPreviewStream } from "@/hooks/useCameraPreviewStream";
+import { useCameraSignalHealth } from "@/hooks/useCameraSignalHealth";
 import { useMicrophoneDevices } from "@/hooks/useMicrophoneDevices";
 import { usePortalOwnsSource } from "@/hooks/usePortalOwnsSource";
 import styles from "./EditorShellV4.module.css";
@@ -121,6 +122,7 @@ export function RecStage({
 		enabled: prefs.camEnabled,
 		deviceId: prefs.camDeviceId ?? undefined,
 	});
+	const cameraSignal = useCameraSignalHealth(cameraStream, prefs.camEnabled);
 	const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
 	useEffect(() => {
 		if (cameraVideoRef.current) cameraVideoRef.current.srcObject = cameraStream;
@@ -207,18 +209,18 @@ export function RecStage({
 				label: "Camera",
 				status: !prefs.camEnabled
 					? "optional"
-					: cameraStream
+					: cameraSignal.status === "live"
 						? "ready"
-						: cameraError
+						: cameraError || cameraSignal.status === "black" || cameraSignal.status === "stalled"
 							? "warning"
 							: "checking",
 				detail: !prefs.camEnabled
 					? "Off by choice"
-					: cameraStream
+					: cameraSignal.status === "live"
 						? `${selectedCamera ?? "Selected camera"} — live preview is working`
 						: cameraError
 							? "Camera could not start"
-							: "Starting preview…",
+							: cameraSignal.message,
 			},
 			{
 				label: "System audio",
@@ -235,7 +237,7 @@ export function RecStage({
 		],
 		[
 			cameraError,
-			cameraStream,
+			cameraSignal,
 			micDevices.devices.length,
 			micLevel,
 			portalOwnsSource,
@@ -257,13 +259,24 @@ export function RecStage({
 					<div className={styles.recPreviewFrame}>
 						{prefs.camEnabled ? (
 							cameraStream ? (
-								<video
-									ref={cameraVideoRef}
-									autoPlay
-									muted
-									playsInline
-									className={styles.recCameraVideo}
-								/>
+								<>
+									<video
+										ref={cameraVideoRef}
+										autoPlay
+										muted
+										playsInline
+										className={styles.recCameraVideo}
+									/>
+									{cameraSignal.status === "black" || cameraSignal.status === "stalled" ? (
+										<div className={styles.recCameraHealthWarning} role="alert">
+											<CameraOff size={18} />
+											<span>
+												{cameraSignal.message}. Turn the camera off and on, or choose another
+												device.
+											</span>
+										</div>
+									) : null}
+								</>
 							) : cameraError ? (
 								<div className={styles.recPreviewPlaceholder}>
 									<CameraOff size={28} />
@@ -510,7 +523,17 @@ export function RecStage({
 						{t("rec.cancel")}
 					</button>
 				) : null}
-				<button type="button" className={styles.bigRecBtn} onClick={onStartRecording}>
+				<button
+					type="button"
+					className={styles.bigRecBtn}
+					onClick={onStartRecording}
+					disabled={prefs.camEnabled && cameraSignal.status !== "live"}
+					title={
+						prefs.camEnabled && cameraSignal.status !== "live"
+							? "Wait for a visible camera image, or turn the camera off."
+							: undefined
+					}
+				>
 					<span className={styles.bigRecDot} aria-hidden />
 					{t("rec.startRecording")}
 				</button>

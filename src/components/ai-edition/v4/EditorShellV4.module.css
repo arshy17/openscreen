@@ -852,6 +852,25 @@
 	object-fit: cover;
 	transform: scaleX(-1);
 }
+.recCameraHealthWarning {
+	position: absolute;
+	left: 18px;
+	right: 18px;
+	bottom: 18px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	padding: 10px 12px;
+	border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--surface) 90%, transparent);
+	color: var(--fg);
+	font-size: 12px;
+	line-height: 1.4;
+	text-align: center;
+	backdrop-filter: blur(12px);
+}
 .recPreviewPlaceholder {
 	display: flex;
 	flex-direction: column;
@@ -1509,6 +1528,12 @@
 }
 .bigRecBtn:hover {
 	background: var(--brand-lo);
+}
+.bigRecBtn:disabled {
+	cursor: not-allowed;
+	opacity: 0.52;
+	background: var(--muted);
+	border-color: var(--border-hi);
 }
 .bigRecBtn.recording {
 	border-color: var(--danger);

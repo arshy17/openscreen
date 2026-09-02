@@ -20,6 +20,7 @@ import type { CursorCaptureMode, RecordedVideoAssetInput } from "@/lib/recording
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { createRecorderHandle, type RecorderHandle } from "./recorderHandle";
+import { type CameraSignalHealth, useCameraSignalHealth } from "./useCameraSignalHealth";
 import { webcamDeviceIdentityFrom } from "./webcamDeviceIdentity";
 
 const TARGET_FRAME_RATE = 60;
@@ -107,6 +108,7 @@ type UseScreenRecorderReturn = {
 	webcamEnabled: boolean;
 	/** Live renderer-owned camera stream used for the HUD self-view. */
 	webcamPreviewStream: MediaStream | null;
+	webcamSignalHealth: CameraSignalHealth;
 	setWebcamEnabled: (enabled: boolean) => Promise<boolean>;
 	cursorCaptureMode: CursorCaptureMode;
 	setCursorCaptureMode: (mode: CursorCaptureMode) => void;
@@ -249,6 +251,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [hideDesktopIcons, setHideDesktopIcons] = useState(false);
 	const [webcamEnabled, setWebcamEnabledState] = useState(false);
 	const [webcamPreviewStream, setWebcamPreviewStream] = useState<MediaStream | null>(null);
+	const webcamSignalHealth = useCameraSignalHealth(webcamPreviewStream, webcamEnabled);
+	const recordWhenCameraReady = useRef(false);
 	const [cursorCaptureMode, setCursorCaptureMode] = useState<CursorCaptureMode>("editable-overlay");
 	const [softwareEncoderFallbackNoticeVisible, setSoftwareEncoderFallbackNoticeVisible] =
 		useState(false);
@@ -2197,6 +2201,31 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		}
 	};
 
+	const startRecordCountdownRef = useRef(startRecordCountdown);
+	startRecordCountdownRef.current = startRecordCountdown;
+
+	const cameraHealthError = useCallback(() => {
+		toast.error("Camera preview is not ready", {
+			description:
+				webcamSignalHealth.status === "black"
+					? "The selected camera is returning black frames. Turn it off and on, close other camera apps, or choose another camera."
+					: "No usable camera frames arrived. Turn the camera off to record without it, or reselect the device.",
+		});
+	}, [webcamSignalHealth.status]);
+
+	useEffect(() => {
+		if (!recordWhenCameraReady.current) return;
+		if (webcamSignalHealth.status === "live") {
+			recordWhenCameraReady.current = false;
+			void startRecordCountdownRef.current();
+			return;
+		}
+		if (webcamSignalHealth.status === "black" || webcamSignalHealth.status === "stalled") {
+			recordWhenCameraReady.current = false;
+			cameraHealthError();
+		}
+	}, [cameraHealthError, webcamSignalHealth.status]);
+
 	const toggleRecording = () => {
 		if (recording) {
 			stopRecording.current();
@@ -2204,7 +2233,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		}
 
 		if (countdownActive) {
+			recordWhenCameraReady.current = false;
 			cancelCountdown();
+			return;
+		}
+
+		if (webcamEnabled && webcamSignalHealth.status !== "live") {
+			if (webcamSignalHealth.status === "checking") {
+				recordWhenCameraReady.current = true;
+				toast.info("Checking the camera image before recording…");
+			} else {
+				cameraHealthError();
+			}
 			return;
 		}
 
@@ -2383,6 +2423,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		setHideDesktopIcons,
 		webcamEnabled,
 		webcamPreviewStream,
+		webcamSignalHealth,
 		setWebcamEnabled,
 		cursorCaptureMode,
 		setCursorCaptureMode,
