@@ -28,8 +28,24 @@ function fail(message) {
 function run(command, args, options = {}) {
 	console.log(`\n> ${command} ${args.join(" ")}`);
 	const result = spawnSync(command, args, { cwd: root, stdio: "inherit", ...options });
-	if (result.error) fail(result.error.message);
-	if (result.status !== 0) process.exit(result.status ?? 1);
+	if (result.error) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(`${command} exited with status ${result.status ?? 1}`);
+	}
+}
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function reopenInstalledApp(appPath) {
+	let lastFailure = null;
+	for (let attempt = 1; attempt <= 5; attempt++) {
+		console.log(`\n> open -n ${appPath}${attempt > 1 ? ` (attempt ${attempt}/5)` : ""}`);
+		const result = spawnSync("open", ["-n", appPath], { cwd: root, stdio: "inherit" });
+		if (!result.error && result.status === 0) return;
+		lastFailure = result.error ?? new Error(`open exited with status ${result.status ?? 1}`);
+		if (attempt < 5) await wait(attempt * 500);
+	}
+	throw lastFailure ?? new Error("Failed to reopen the installed application.");
 }
 
 function output(command, args) {
@@ -176,11 +192,18 @@ if (fs.existsSync(installedApp)) fs.renameSync(installedApp, previousApp);
 try {
 	fs.renameSync(stagedApp, installedApp);
 	run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", installedApp]);
-	run("open", ["-a", installedApp]);
+	// LaunchServices can keep a stale connection to the just-quit bundle for a
+	// moment and answer -609 even though the new app is valid. Launch the exact
+	// path as a new instance and retry before deciding the atomic install failed.
+	await reopenInstalledApp(installedApp);
 	fs.rmSync(previousApp, { recursive: true, force: true });
 } catch (error) {
 	fs.rmSync(installedApp, { recursive: true, force: true });
 	if (fs.existsSync(previousApp)) fs.renameSync(previousApp, installedApp);
+	// A failed update should leave the previous application usable, not merely
+	// restored on disk. This reopen is best-effort; the original failure remains
+	// the one reported to the caller.
+	spawnSync("open", ["-n", installedApp], { cwd: root, stdio: "inherit" });
 	throw error;
 }
 
