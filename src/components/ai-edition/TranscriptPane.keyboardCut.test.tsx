@@ -151,6 +151,19 @@ describe("transcript word corrections", () => {
 		);
 	});
 
+	it("opens the word editor with an ordinary click", () => {
+		const onUpdateWordText = vi.fn();
+		const { container } = renderPane([], vi.fn(), [], onUpdateWordText);
+		const word = container.querySelector<HTMLElement>('[data-word-id="clip_1:w2"]');
+		if (!word) throw new Error("word not rendered");
+
+		fireEvent.click(word);
+
+		expect(container.querySelector<HTMLInputElement>("[data-transcript-word-editor]")).toHaveValue(
+			"deux",
+		);
+	});
+
 	it("cancels a correction with Escape", () => {
 		const onUpdateWordText = vi.fn();
 		const { container } = renderPane([], vi.fn(), [], onUpdateWordText);

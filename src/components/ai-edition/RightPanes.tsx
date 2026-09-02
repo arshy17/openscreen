@@ -1417,6 +1417,17 @@ const TranscriptWord = memo(function TranscriptWord({
 			}}
 			onMouseEnter={() => setHover(true)}
 			onMouseLeave={() => setHover(false)}
+			onClick={(event) => {
+				if (removed || !onUpdateText) return;
+				const selection = globalThis.getSelection();
+				// A drag-selection is for cutting words, not correcting one. An
+				// ordinary collapsed click is safe to turn into the explicit word
+				// editor, and also makes correction accessible to trackpads and assistive
+				// input that do not deliver Chromium's dblclick event reliably.
+				if (selection && !selection.isCollapsed) return;
+				event.stopPropagation();
+				beginEdit();
+			}}
 			onMouseDown={(event) => {
 				// Chromium's native word selection can consume `dblclick` inside a
 				// contentEditable parent before React sees it. Start the editor on the
