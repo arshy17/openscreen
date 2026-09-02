@@ -51,6 +51,13 @@ import type { AxcutDocument } from "../schema";
  *  stretched, concatenated timeline, so the same value meant different delays under a speed
  *  region, and near a cut the export pulls audio across the junction while the preview cannot. */
 export const AUDIO_GAIN_DB_LIMIT = 12;
+/** Soundtracks are intentionally quieter than programme audio by default. */
+export const BACKGROUND_MUSIC_GAIN_DB_MIN = -40;
+export const BACKGROUND_MUSIC_GAIN_DB_MAX = 0;
+export const DEFAULT_BACKGROUND_MUSIC_GAIN_DB = -18;
+export const BACKGROUND_MUSIC_FADE_SEC_MAX = 10;
+export type AudioEnhancementPreset = "clarity" | "podcast" | "broadcast";
+export type AudioMasteringTarget = "off" | "social" | "podcast" | "broadcast";
 
 /** dB to the linear scalar every side of the boundary multiplies by.
  *
@@ -103,6 +110,22 @@ export interface EditorSettingsSnapshot {
 	 *  Authoritative: `webcamCropRegion.x/y` are rebuilt from it on read. */
 	webcamCropPan: CropPan;
 	audioGainDb: number;
+	backgroundMusicPath: string | null;
+	backgroundMusicName: string;
+	backgroundMusicDurationSec: number;
+	backgroundMusicGainDb: number;
+	backgroundMusicLoop: boolean;
+	backgroundMusicFadeInSec: number;
+	backgroundMusicFadeOutSec: number;
+	audioEnhancementEnabled: boolean;
+	audioEnhancementPreset: AudioEnhancementPreset;
+	audioEnhancementIntensity: number;
+	audioNoiseReductionStrength: number;
+	audioMasteringTarget: AudioMasteringTarget;
+	audioLimiterEnabled: boolean;
+	audioLimiterCeilingDb: number;
+	backgroundMusicDuckingEnabled: boolean;
+	backgroundMusicDuckingAmountDb: number;
 	webcamBackgroundMode: WebcamBackgroundMode;
 	webcamWallpaper: string;
 	webcamBlurIntensity: number;
@@ -135,6 +158,22 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamCropRegion: DEFAULT_CROP_REGION,
 	webcamCropPan: DEFAULT_CROP_PAN,
 	audioGainDb: 0,
+	backgroundMusicPath: null,
+	backgroundMusicName: "",
+	backgroundMusicDurationSec: 0,
+	backgroundMusicGainDb: DEFAULT_BACKGROUND_MUSIC_GAIN_DB,
+	backgroundMusicLoop: true,
+	backgroundMusicFadeInSec: 1,
+	backgroundMusicFadeOutSec: 1,
+	audioEnhancementEnabled: false,
+	audioEnhancementPreset: "clarity",
+	audioEnhancementIntensity: 0.5,
+	audioNoiseReductionStrength: 0,
+	audioMasteringTarget: "off",
+	audioLimiterEnabled: false,
+	audioLimiterCeilingDb: -1,
+	backgroundMusicDuckingEnabled: false,
+	backgroundMusicDuckingAmountDb: 9,
 	webcamBackgroundMode: DEFAULT_WEBCAM_BACKGROUND_MODE,
 	webcamWallpaper: DEFAULT_WALLPAPER,
 	webcamBlurIntensity: DEFAULT_WEBCAM_BLUR_INTENSITY,
@@ -168,6 +207,22 @@ interface LegacyShape {
 	webcamCropRegion?: CropRegion;
 	webcamCropPan?: CropPan;
 	audioGainDb?: number;
+	backgroundMusicPath?: string | null;
+	backgroundMusicName?: string;
+	backgroundMusicDurationSec?: number;
+	backgroundMusicGainDb?: number;
+	backgroundMusicLoop?: boolean;
+	backgroundMusicFadeInSec?: number;
+	backgroundMusicFadeOutSec?: number;
+	audioEnhancementEnabled?: boolean;
+	audioEnhancementPreset?: AudioEnhancementPreset;
+	audioEnhancementIntensity?: number;
+	audioNoiseReductionStrength?: number;
+	audioMasteringTarget?: AudioMasteringTarget;
+	audioLimiterEnabled?: boolean;
+	audioLimiterCeilingDb?: number;
+	backgroundMusicDuckingEnabled?: boolean;
+	backgroundMusicDuckingAmountDb?: number;
 	webcamBackgroundMode?: WebcamBackgroundMode;
 	webcamWallpaper?: string;
 	webcamBlurIntensity?: number;
@@ -247,6 +302,51 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 			AUDIO_GAIN_DB_LIMIT,
 			Math.max(-AUDIO_GAIN_DB_LIMIT, num(legacy?.audioGainDb, 0)),
 		),
+		backgroundMusicPath:
+			typeof legacy?.backgroundMusicPath === "string" && legacy.backgroundMusicPath.trim()
+				? legacy.backgroundMusicPath
+				: null,
+		backgroundMusicName: str(legacy?.backgroundMusicName, ""),
+		backgroundMusicDurationSec: Math.max(0, num(legacy?.backgroundMusicDurationSec, 0)),
+		backgroundMusicGainDb: Math.min(
+			BACKGROUND_MUSIC_GAIN_DB_MAX,
+			Math.max(
+				BACKGROUND_MUSIC_GAIN_DB_MIN,
+				num(legacy?.backgroundMusicGainDb, DEFAULT_BACKGROUND_MUSIC_GAIN_DB),
+			),
+		),
+		backgroundMusicLoop: bool(legacy?.backgroundMusicLoop, true),
+		backgroundMusicFadeInSec: Math.min(
+			BACKGROUND_MUSIC_FADE_SEC_MAX,
+			Math.max(0, num(legacy?.backgroundMusicFadeInSec, 1)),
+		),
+		backgroundMusicFadeOutSec: Math.min(
+			BACKGROUND_MUSIC_FADE_SEC_MAX,
+			Math.max(0, num(legacy?.backgroundMusicFadeOutSec, 1)),
+		),
+		audioEnhancementEnabled: bool(legacy?.audioEnhancementEnabled, false),
+		audioEnhancementPreset:
+			legacy?.audioEnhancementPreset === "podcast" ||
+			legacy?.audioEnhancementPreset === "broadcast" ||
+			legacy?.audioEnhancementPreset === "clarity"
+				? legacy.audioEnhancementPreset
+				: "clarity",
+		audioEnhancementIntensity: clamp01(num(legacy?.audioEnhancementIntensity, 0.5)),
+		audioNoiseReductionStrength: clamp01(num(legacy?.audioNoiseReductionStrength, 0)),
+		audioMasteringTarget:
+			legacy?.audioMasteringTarget === "social" ||
+			legacy?.audioMasteringTarget === "podcast" ||
+			legacy?.audioMasteringTarget === "broadcast" ||
+			legacy?.audioMasteringTarget === "off"
+				? legacy.audioMasteringTarget
+				: "off",
+		audioLimiterEnabled: bool(legacy?.audioLimiterEnabled, false),
+		audioLimiterCeilingDb: Math.min(-0.1, Math.max(-6, num(legacy?.audioLimiterCeilingDb, -1))),
+		backgroundMusicDuckingEnabled: bool(legacy?.backgroundMusicDuckingEnabled, false),
+		backgroundMusicDuckingAmountDb: Math.min(
+			24,
+			Math.max(0, num(legacy?.backgroundMusicDuckingAmountDb, 9)),
+		),
 		webcamBackgroundMode: isWebcamBackgroundMode(legacy?.webcamBackgroundMode)
 			? legacy.webcamBackgroundMode
 			: DEFAULT_EDITOR_SETTINGS.webcamBackgroundMode,
@@ -280,6 +380,22 @@ export interface EditorSettingsPatch {
 	webcamCropRegion?: CropRegion;
 	webcamCropPan?: CropPan;
 	audioGainDb?: number;
+	backgroundMusicPath?: string | null;
+	backgroundMusicName?: string;
+	backgroundMusicDurationSec?: number;
+	backgroundMusicGainDb?: number;
+	backgroundMusicLoop?: boolean;
+	backgroundMusicFadeInSec?: number;
+	backgroundMusicFadeOutSec?: number;
+	audioEnhancementEnabled?: boolean;
+	audioEnhancementPreset?: AudioEnhancementPreset;
+	audioEnhancementIntensity?: number;
+	audioNoiseReductionStrength?: number;
+	audioMasteringTarget?: AudioMasteringTarget;
+	audioLimiterEnabled?: boolean;
+	audioLimiterCeilingDb?: number;
+	backgroundMusicDuckingEnabled?: boolean;
+	backgroundMusicDuckingAmountDb?: number;
 	webcamBackgroundMode?: WebcamBackgroundMode;
 	webcamWallpaper?: string;
 	webcamBlurIntensity?: number;

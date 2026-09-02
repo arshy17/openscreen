@@ -7,7 +7,13 @@ import {
 } from "@/components/video-editor/types";
 import type { AxcutDocument } from "../schema";
 import { axcutSchemaVersion } from "../schema";
-import { DEFAULT_EDITOR_SETTINGS, getEditorSettings, patchEditorSettings } from "./editorSettings";
+import {
+	BACKGROUND_MUSIC_FADE_SEC_MAX,
+	BACKGROUND_MUSIC_GAIN_DB_MIN,
+	DEFAULT_EDITOR_SETTINGS,
+	getEditorSettings,
+	patchEditorSettings,
+} from "./editorSettings";
 
 const baseDoc: AxcutDocument = {
 	schemaVersion: axcutSchemaVersion,
@@ -44,6 +50,10 @@ describe("getEditorSettings", () => {
 		expect(snap.webcamLayoutPreset).toBe(DEFAULT_WEBCAM_LAYOUT_PRESET);
 		expect(snap.webcamMaskShape).toBe(DEFAULT_WEBCAM_MASK_SHAPE);
 		expect(snap.cursor.size).toBe(DEFAULT_CURSOR_SIZE);
+		expect(snap.audioNoiseReductionStrength).toBe(0);
+		expect(snap.audioMasteringTarget).toBe("off");
+		expect(snap.audioLimiterEnabled).toBe(false);
+		expect(snap.backgroundMusicDuckingEnabled).toBe(false);
 	});
 
 	it("returns the defaults when the document is null", () => {
@@ -83,6 +93,51 @@ describe("getEditorSettings", () => {
 		};
 		const snap = getEditorSettings(doc);
 		expect(snap.showBlur).toBe(false);
+	});
+
+	it("reads and bounds saved background music controls", () => {
+		const doc = {
+			...baseDoc,
+			legacyEditor: {
+				backgroundMusicPath: "/Music/bed.wav",
+				backgroundMusicName: "bed.wav",
+				backgroundMusicDurationSec: 42,
+				backgroundMusicGainDb: -999,
+				backgroundMusicLoop: false,
+				backgroundMusicFadeInSec: 999,
+				backgroundMusicFadeOutSec: -5,
+			},
+		} as AxcutDocument;
+		const snap = getEditorSettings(doc);
+		expect(snap.backgroundMusicPath).toBe("/Music/bed.wav");
+		expect(snap.backgroundMusicDurationSec).toBe(42);
+		expect(snap.backgroundMusicGainDb).toBe(BACKGROUND_MUSIC_GAIN_DB_MIN);
+		expect(snap.backgroundMusicLoop).toBe(false);
+		expect(snap.backgroundMusicFadeInSec).toBe(BACKGROUND_MUSIC_FADE_SEC_MAX);
+		expect(snap.backgroundMusicFadeOutSec).toBe(0);
+	});
+
+	it("bounds optional mastering, limiter, and music ducking controls", () => {
+		const doc = {
+			...baseDoc,
+			legacyEditor: {
+				audioNoiseReductionStrength: 4,
+				audioMasteringTarget: "social",
+				audioLimiterEnabled: true,
+				audioLimiterCeilingDb: -99,
+				backgroundMusicDuckingEnabled: true,
+				backgroundMusicDuckingAmountDb: 99,
+			},
+		} as AxcutDocument;
+		const snap = getEditorSettings(doc);
+		expect(snap).toMatchObject({
+			audioNoiseReductionStrength: 1,
+			audioMasteringTarget: "social",
+			audioLimiterEnabled: true,
+			audioLimiterCeilingDb: -6,
+			backgroundMusicDuckingEnabled: true,
+			backgroundMusicDuckingAmountDb: 24,
+		});
 	});
 });
 
@@ -125,6 +180,29 @@ describe("patchEditorSettings", () => {
 		patchEditorSettings(baseDoc, { showBlur: true });
 		const after = getEditorSettings(baseDoc);
 		expect(after).toEqual(before);
+	});
+
+	it("round-trips a background music selection without changing programme gain", () => {
+		const next = patchEditorSettings(baseDoc, {
+			backgroundMusicPath: "/Music/bed.m4a",
+			backgroundMusicName: "bed.m4a",
+			backgroundMusicDurationSec: 90,
+			backgroundMusicGainDb: -21,
+			backgroundMusicLoop: true,
+			backgroundMusicFadeInSec: 1.5,
+			backgroundMusicFadeOutSec: 2.5,
+		});
+		const snap = getEditorSettings(next);
+		expect(snap).toMatchObject({
+			audioGainDb: 0,
+			backgroundMusicPath: "/Music/bed.m4a",
+			backgroundMusicName: "bed.m4a",
+			backgroundMusicDurationSec: 90,
+			backgroundMusicGainDb: -21,
+			backgroundMusicLoop: true,
+			backgroundMusicFadeInSec: 1.5,
+			backgroundMusicFadeOutSec: 2.5,
+		});
 	});
 
 	it("round-trips webcamPosition through legacyEditor", () => {
@@ -268,5 +346,23 @@ describe("patchEditorSettings", () => {
 		expect(getEditorSettings(tooHigh).webcamBlurIntensity).toBe(1);
 		const negative = { ...baseDoc, legacyEditor: { webcamBlurIntensity: -3 } } as typeof baseDoc;
 		expect(getEditorSettings(negative).webcamBlurIntensity).toBe(0);
+	});
+
+	it("keeps local audio enhancement off by default and clamps authored intensity", () => {
+		expect(getEditorSettings(baseDoc)).toMatchObject({
+			audioEnhancementEnabled: false,
+			audioEnhancementPreset: "clarity",
+			audioEnhancementIntensity: 0.5,
+		});
+		const patched = patchEditorSettings(baseDoc, {
+			audioEnhancementEnabled: true,
+			audioEnhancementPreset: "broadcast",
+			audioEnhancementIntensity: 4,
+		});
+		expect(getEditorSettings(patched)).toMatchObject({
+			audioEnhancementEnabled: true,
+			audioEnhancementPreset: "broadcast",
+			audioEnhancementIntensity: 1,
+		});
 	});
 });

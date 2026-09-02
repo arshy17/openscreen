@@ -245,6 +245,23 @@ export interface AiEditionDocumentResult {
 	error?: string;
 }
 
+export type AiEditionSnapshotReason = "autosave" | "manual" | "ai" | "restore";
+
+export interface AiEditionProjectSnapshotSummary {
+	id: string;
+	projectId: string;
+	createdAt: string;
+	label: string;
+	reason: AiEditionSnapshotReason;
+	sizeBytes: number;
+}
+
+export interface AiEditionPortableProjectResult {
+	path: string;
+	mediaCount: number;
+	manifestPath: string;
+}
+
 export interface AiEditionLlmConfig {
 	provider: string;
 	model: string;
@@ -277,6 +294,13 @@ export interface AiEditionLlmDisconnectResult {
 
 export interface AiEditionLlmProviderModelsResult {
 	models: string[];
+	error?: string;
+}
+
+export interface AiEditionPrivacyNameClassificationResult {
+	success: boolean;
+	nameCandidateIds: string[];
+	model?: string;
 	error?: string;
 }
 
@@ -544,6 +568,30 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "aiEdition";
+			action: "document.snapshot.list";
+			payload: { projectId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.snapshot.create";
+			payload: { projectId: string; label?: string; reason?: AiEditionSnapshotReason };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.snapshot.restore";
+			payload: { projectId: string; snapshotId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.collectMedia";
+			payload: { projectId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
 			action: "llm.getSnapshot";
 			payload?: EmptyPayload;
 			requestId?: string;
@@ -576,6 +624,12 @@ export type NativeBridgeRequest =
 			domain: "aiEdition";
 			action: "llm.listProviderModels";
 			payload: { providerId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "privacy.classifyNames";
+			payload: { candidates: Array<{ id: string; text: string }> };
 			requestId?: string;
 	  }
 	| {

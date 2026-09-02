@@ -230,12 +230,9 @@ describe("executeAgentTool", () => {
 		expect(payload.segments[1].kind).toBe("silence");
 	});
 
-	it("getTranscript returns a long transcript whole, word for word", () => {
-		// The regression test for a `.slice(0, 800)` that used to sit here. On the
-		// production path a segment is one WORD, so the cap cut a half-hour
-		// recording at roughly its fifth minute and reported nothing — the model
-		// trimmed the silences it could see and called the job done. 4000 words is
-		// about half an hour of speech.
+	it("getTranscript returns a long transcript completely in compact phrases", () => {
+		// The model still receives the tail of a half-hour transcript, but without
+		// paying the JSON-object overhead of 4000 one-word segments.
 		const base = fixtureDocument();
 		const segments = Array.from({ length: 4000 }, (_, i) => ({
 			id: `seg_${i}`,
@@ -254,10 +251,26 @@ describe("executeAgentTool", () => {
 		const result = executeAgentTool(doc, "getTranscript", "{}");
 		expect(result.ok).toBe(true);
 		const payload = JSON.parse(result.resultJson);
-		expect(payload.segments).toHaveLength(4000);
-		// The last word matters more than the count: a cap keeps the head and
-		// drops the tail, so the tail is what proves it is gone.
-		expect(payload.segments.at(-1).text).toBe("mot3999");
+		expect(payload.mode).toBe("phrases");
+		expect(payload.sourceSegmentCount).toBe(4000);
+		expect(payload.page.complete).toBe(true);
+		expect(payload.segments.map((segment: { text: string }) => segment.text).join(" ")).toContain(
+			"mot3999",
+		);
+		expect(payload.segments.length).toBeLessThan(500);
+	});
+
+	it("getTranscript pages exact word timings when requested", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"getTranscript",
+			JSON.stringify({ mode: "words", offset: 1, limit: 1 }),
+		);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.mode).toBe("words");
+		expect(payload.segments).toHaveLength(1);
+		expect(payload.segments[0].kind).toBe("silence");
+		expect(payload.page).toMatchObject({ offset: 1, returned: 1, total: 2, complete: true });
 	});
 
 	it("getTranscript fails cleanly when no transcript exists", () => {
@@ -635,6 +648,18 @@ describe("executeAgentTool", () => {
 		expect(() => documentSchema.parse(result.document)).not.toThrow();
 	});
 
+	it("addZoom defaults to the editor's 1.50× strength", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addZoom",
+			JSON.stringify({ startSec: 2, endSec: 4 }),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.document?.zoomRanges.at(-1)?.depth).toBe(2);
+		expect(JSON.parse(result.resultJson).renderedScale).toBe(1.5);
+		expect(result.summary).toContain("1.50×");
+	});
+
 	it("setZoom patches only the fields passed", () => {
 		const withZoom = executeAgentTool(
 			fixtureDocument(),
@@ -815,6 +840,47 @@ describe("executeAgentTool", () => {
 		// counts-only fields are gone in favour of the labelled effect lists.
 		expect(snapshot.zoomRangeCount).toBeUndefined();
 		expect(snapshot.annotationCount).toBeUndefined();
+	});
+
+	it("bounds dense effect lists and exposes exact paged reads", () => {
+		let dense = fixtureDocument();
+		for (let index = 0; index < 60; index += 1) {
+			const startSec = index * 0.3;
+			const result = executeAgentTool(
+				dense,
+				"addZoom",
+				JSON.stringify({
+					startSec,
+					endSec: startSec + 0.12,
+					focus: { cx: (index % 10) / 10, cy: 0.5 },
+				}),
+			);
+			dense = result.document as AxcutDocument;
+		}
+
+		const summary = JSON.parse(executeAgentTool(dense, "getCurrentDocument", "{}").resultJson);
+		expect(summary.effectPages.zoomRanges).toMatchObject({
+			total: 60,
+			returned: 8,
+			complete: false,
+			nextOffset: 8,
+		});
+		expect(summary.zoomRanges).toHaveLength(8);
+
+		const page = JSON.parse(
+			executeAgentTool(
+				dense,
+				"getCurrentDocument",
+				JSON.stringify({ effectType: "zoomRanges", offset: 50, limit: 10 }),
+			).resultJson,
+		);
+		expect(page.effectPages.zoomRanges).toMatchObject({
+			total: 60,
+			offset: 50,
+			returned: 10,
+			complete: true,
+		});
+		expect(page.zoomRanges).toHaveLength(10);
 	});
 
 	it("addCameraFullscreen / setCameraFullscreen write a region the snapshot exposes", () => {

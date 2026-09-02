@@ -37,9 +37,13 @@ import {
 	anthropicCachingMiddleware,
 	buildSystemPrompt,
 	buildTools,
+	CREATOR_EDIT_TOOL_NAMES,
+	creatorEditContext,
+	creatorEditRanges,
 	type OpenScreenAgentSink,
 	SYSTEM_PROMPT,
 	TOOL_DESCRIPTIONS,
+	toolNamesForTurn,
 } from "./service";
 
 // Both rosters used to be re-typed here, and a third time in the workbench. This
@@ -49,6 +53,53 @@ import {
 // builds, and the bench reads the same array.
 const OPENSCREEN_TOOLS: readonly string[] = OPENSCREEN_TOOL_NAMES;
 const PHANTOM_TOOLS: readonly string[] = PHANTOM_TOOL_NAMES;
+
+describe("turn-specific tool profiles", () => {
+	it("keeps normal chat fully capable", () => {
+		expect(toolNamesForTurn("Please edit my video")).toEqual(OPENSCREEN_TOOL_NAMES);
+	});
+
+	it("uses the focused tool surface for the explicit creator-edit workflow", () => {
+		expect(toolNamesForTurn("OpenScreen Creator Edit mode.\nMake it polished.")).toEqual(
+			CREATOR_EDIT_TOOL_NAMES,
+		);
+		expect(CREATOR_EDIT_TOOL_NAMES.length).toBeLessThan(OPENSCREEN_TOOL_NAMES.length);
+	});
+
+	it("preloads the bounded project and complete phrase transcript", () => {
+		const context = creatorEditContext(fixtureDocument(), { asset_1: true });
+		expect(context).toContain("PROJECT_SNAPSHOT_JSON=");
+		expect(context).toContain("TRANSCRIPT_1_JSON=");
+		expect(context).toContain('"mode":"phrases"');
+		expect(context).toContain('"complete":true');
+	});
+
+	it("reviews only the strongest uncut pause candidates", () => {
+		const base = fixtureDocument();
+		const document = documentSchema.parse({
+			...base,
+			transcripts: [
+				{
+					...base.transcripts[0],
+					segments: [
+						{ id: "a", kind: "speech", startSec: 0, endSec: 2, text: "One", wordIds: [] },
+						{ id: "b", kind: "speech", startSec: 5, endSec: 6, text: "Two", wordIds: [] },
+						{ id: "c", kind: "speech", startSec: 20, endSec: 21, text: "Three", wordIds: [] },
+					],
+				},
+			],
+		});
+		const [strongest] = creatorEditRanges(document, 10, 1);
+		expect(strongest).toMatchObject({
+			assetId: "asset_1",
+			candidateGapSec: 3,
+			index: 1,
+			total: 1,
+		});
+		expect(strongest.startSec).toBeLessThan(3.5);
+		expect(strongest.endSec).toBeGreaterThan(3.5);
+	});
+});
 
 /** Valid arguments for every tool, chosen so the executor's verdict is split
  * across the table: some succeed, some are refused for an unknown id, and
@@ -362,11 +413,12 @@ describe("what the descriptions say about zoom strength", () => {
 	it("carries the real depth table and not the formula that never matched it", () => {
 		// "depth 1–6 maps to 1.0×–3.5×" was `depth/2 + 0.5`, wrong at both ends of a
 		// table running 1.25×–5.0×. The table itself is the contract now, including
-		// today's 2.00× default at depth 3.
+		// today's 1.50× default at depth 2.
 		for (const text of [TOOL_DESCRIPTIONS.addZoom, TOOL_DESCRIPTIONS.setZoom, SYSTEM_PROMPT]) {
 			expect(text).not.toMatch(/1\.0×–3\.5×|1\.0x-3\.5x/);
 		}
 		expect(TOOL_DESCRIPTIONS.addZoom).toContain(ZOOM_DEPTH_LEGEND);
+		expect(TOOL_DESCRIPTIONS.addZoom).toContain("default depth 2 renders at 1.50×");
 		expect(SYSTEM_PROMPT).toContain(ZOOM_DEPTH_LEGEND);
 		// Derived, not retyped: editing the table must move the prompt with it.
 		expect(ZOOM_DEPTH_LEGEND).toContain(`3=${ZOOM_DEPTH_SCALES[3].toFixed(2)}×`);

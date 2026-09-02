@@ -4,10 +4,12 @@
 // The openai-oauth / copilot-proxy suites that lived here went with those
 // providers in 1.8.0 — see provider-registry.ts.
 
+import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
 	ANTHROPIC_API_MAX_OUTPUT_TOKENS,
 	createOpenScreenChatModel,
+	localOpenAICompatibleModelKwargs,
 	messageContentToText,
 	messageContentToThinking,
 } from "./chat-model";
@@ -16,6 +18,10 @@ import {
  * `clientConfig`; that is where the base URL and default headers land. */
 function clientConfig(model: unknown): Record<string, unknown> {
 	return (model as { clientConfig?: Record<string, unknown> }).clientConfig ?? {};
+}
+
+function modelKwargs(model: unknown): Record<string, unknown> {
+	return (model as { modelKwargs?: Record<string, unknown> }).modelKwargs ?? {};
 }
 
 describe("createOpenScreenChatModel — provider aliases", () => {
@@ -88,6 +94,92 @@ describe("createOpenScreenChatModel — Anthropic-wire output budget", () => {
 			apiKey: "sk-ant-test",
 		});
 		expect(maxTokens(current)).toBe(ANTHROPIC_API_MAX_OUTPUT_TOKENS);
+	});
+});
+
+describe("createOpenScreenChatModel — local Qwen responsiveness", () => {
+	it("defaults loopback OpenAI-compatible Qwen models to fast tool-call mode", async () => {
+		const model = await createOpenScreenChatModel({
+			provider: "openai-compatible",
+			model: "qwen3.8:27b-q6_k-64k",
+			baseUrl: "http://127.0.0.1:11434/v1",
+		});
+		expect(modelKwargs(model)).toMatchObject({ reasoning_effort: "low", think: false });
+	});
+
+	it("honours a supported explicit local Qwen effort", () => {
+		expect(
+			localOpenAICompatibleModelKwargs({
+				provider: "openai-compatible",
+				model: "qwen3.8:27b-q6_k-64k",
+				baseUrl: "http://localhost:11434/v1",
+				reasoningEffort: "medium",
+			}),
+		).toEqual({ reasoning_effort: "medium" });
+	});
+
+	it("does not add Ollama-specific fields to remote or non-Qwen endpoints", () => {
+		expect(
+			localOpenAICompatibleModelKwargs({
+				provider: "openai-compatible",
+				model: "qwen3.8:27b",
+				baseUrl: "https://models.example.com/v1",
+			}),
+		).toEqual({});
+		expect(
+			localOpenAICompatibleModelKwargs({
+				provider: "openai-compatible",
+				model: "llama3.2",
+				baseUrl: "http://127.0.0.1:11434/v1",
+			}),
+		).toEqual({});
+	});
+
+	it("sends fast-mode fields in the actual OpenAI-compatible request", async () => {
+		let requestBody: Record<string, unknown> | null = null;
+		const server = createServer((request, response) => {
+			let raw = "";
+			request.setEncoding("utf8");
+			request.on("data", (chunk) => {
+				raw += chunk;
+			});
+			request.on("end", () => {
+				requestBody = JSON.parse(raw) as Record<string, unknown>;
+				response.writeHead(200, { "content-type": "application/json" });
+				response.end(
+					JSON.stringify({
+						id: "chatcmpl-test",
+						object: "chat.completion",
+						created: 0,
+						model: "qwen3.8:test",
+						choices: [
+							{
+								index: 0,
+								finish_reason: "stop",
+								message: { role: "assistant", content: "ok" },
+							},
+						],
+						usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+					}),
+				);
+			});
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const address = server.address();
+			if (!address || typeof address === "string") throw new Error("Test server did not bind");
+			const model = await createOpenScreenChatModel({
+				provider: "openai-compatible",
+				model: "qwen3.8:test",
+				baseUrl: `http://127.0.0.1:${address.port}/v1`,
+			});
+			await model.invoke("ping");
+			expect(requestBody).toMatchObject({ reasoning_effort: "low", think: false });
+		} finally {
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+		}
 	});
 });
 

@@ -24,7 +24,11 @@ import type { AxcutDocument } from "../../../src/lib/ai-edition/schema";
 // tool descriptions used to assert "depth 1–6 maps to 1.0×–3.5×" — a formula
 // (`depth/2 + 0.5`) that was purged from two rendering sites and survived here,
 // wrong at both ends of a table that actually runs 1.25× to 5.0×.
-import { ZOOM_DEPTH_LEGEND } from "../../../src/lib/ai-edition/timeline/zoom-scale";
+import {
+	DEFAULT_ZOOM_DEPTH,
+	ZOOM_DEPTH_LEGEND,
+	ZOOM_DEPTH_SCALES,
+} from "../../../src/lib/ai-edition/timeline/zoom-scale";
 import {
 	addAnnotationArgs,
 	addCameraFullscreenArgs,
@@ -35,10 +39,12 @@ import {
 	addZoomsArgs,
 	type CursorTelemetryLoad,
 	executeAgentTool,
+	getCurrentDocumentArgs,
 	getCursorTrackArgs,
 	getTranscriptArgs,
 	isMutatingTool,
 	moveClipArgs,
+	OPENSCREEN_TOOL_NAMES,
 	removeClipArgs,
 	removeModifierArgs,
 	removeTrimArgs,
@@ -139,11 +145,210 @@ export function buildSystemPrompt(options: { editsAllowed: boolean }): string {
  *  case, and the string the surface tests measure the wire against. */
 export const SYSTEM_PROMPT = buildSystemPrompt({ editsAllowed: true });
 
+const CREATOR_SYSTEM_PROMPT = [
+	"You are OpenScreen's automatic semantic video editor.",
+	"The user selected a creator theme. The renderer has already applied composition, captions and safe built-in visuals; preserve those choices.",
+	"The internal user message contains a compact live document snapshot, complete timed phrase transcripts for one bounded source-time section, and the section bounds.",
+	"The only provided tool is addTrims. Call it at most once, with no more than five high-confidence cuts for this section. If no cut is clearly safe, return a concise no-change report without calling it.",
+	"A trim is a source-time cut inside one existing clip. Tighten only unmistakable dead air, a long pause or an obvious verbal restart. Keep breaths, natural rhythm, instructions, demonstrations, disclaimers and meaningful reactions.",
+	"Composition, captions, icons, animation, zooms and camera styling are already complete. Do not plan or describe additional visual changes in this semantic pacing pass.",
+	"Never edit outside WORK_RANGE_JSON. Never claim an edit unless its tool result succeeded. Be concise when reporting the section.",
+].join("\n");
+
+export function buildCreatorSystemPrompt(options: { editsAllowed: boolean }): string {
+	return options.editsAllowed
+		? CREATOR_SYSTEM_PROMPT
+		: `${CREATOR_SYSTEM_PROMPT}${CONSENT_PROMPT_BLOCK}`;
+}
+
+const CREATOR_EDIT_MARKER = "OpenScreen Creator Edit mode.";
+export const CREATOR_EDIT_TOOL_NAMES = ["addTrims"] as const;
+
+export interface CreatorEditRange {
+	startSec: number;
+	endSec: number;
+	index: number;
+	total: number;
+	assetId?: string;
+	candidateGapSec?: number;
+}
+
+export function isCreatorEditMessage(userMessage: string): boolean {
+	return userMessage.includes(CREATOR_EDIT_MARKER);
+}
+
+/**
+ * Automatic creator editing is a known workflow, not an open-ended chat turn.
+ * Giving a local model all 23 editor schemas for that pass wastes context and
+ * makes every graph step slower. Keep normal chat fully capable, while the
+ * explicit Creator Edit marker gets the exact read/write surface its prompt
+ * promises.
+ */
+export function toolNamesForTurn(userMessage: string): readonly string[] {
+	return isCreatorEditMessage(userMessage) ? CREATOR_EDIT_TOOL_NAMES : OPENSCREEN_TOOL_NAMES;
+}
+
+export function creatorEditRanges(
+	document: AxcutDocument,
+	windowSec = 50,
+	maxRanges = 6,
+): CreatorEditRange[] {
+	const usedAssetIds = new Set(document.timeline.clips.map((clip) => clip.assetId));
+	const candidates: Array<{
+		assetId: string;
+		gapStartSec: number;
+		gapEndSec: number;
+		gapSec: number;
+		durationSec: number;
+	}> = [];
+
+	for (const transcript of document.transcripts) {
+		if (!usedAssetIds.has(transcript.assetId)) continue;
+		const asset = document.assets.find((item) => item.id === transcript.assetId);
+		const durationSec = asset?.durationSec ?? transcript.segments.at(-1)?.endSec ?? 0;
+		const segments = [...transcript.segments].sort((a, b) => a.startSec - b.startSec);
+		for (let index = 0; index < segments.length - 1; index += 1) {
+			const current = segments[index];
+			const next = segments[index + 1];
+			const gapSec = next.startSec - current.endSec;
+			if (gapSec < 0.9) continue;
+			const alreadyCut = document.timeline.trimRanges.some(
+				(trim) =>
+					trim.assetId === transcript.assetId &&
+					trim.endSec > current.endSec &&
+					trim.startSec < next.startSec,
+			);
+			if (alreadyCut) continue;
+			candidates.push({
+				assetId: transcript.assetId,
+				gapStartSec: current.endSec,
+				gapEndSec: next.startSec,
+				gapSec,
+				durationSec,
+			});
+		}
+	}
+
+	const selected: Array<(typeof candidates)[number] & { startSec: number; endSec: number }> = [];
+	for (const candidate of candidates.sort((a, b) => b.gapSec - a.gapSec)) {
+		const centre = (candidate.gapStartSec + candidate.gapEndSec) / 2;
+		const startSec = Math.max(0, centre - windowSec / 2);
+		const endSec = Math.min(candidate.durationSec, startSec + windowSec);
+		const overlaps = selected.some(
+			(item) =>
+				item.assetId === candidate.assetId &&
+				Math.min(item.endSec, endSec) - Math.max(item.startSec, startSec) > 0,
+		);
+		if (overlaps) continue;
+		selected.push({ ...candidate, startSec, endSec });
+		if (selected.length >= maxRanges) break;
+	}
+
+	if (selected.length === 0) {
+		const primaryAssetId = document.project.primaryAssetId ?? document.assets[0]?.id;
+		const durationSec =
+			document.assets.find((asset) => asset.id === primaryAssetId)?.durationSec ?? 0;
+		return [
+			{
+				startSec: 0,
+				endSec: Math.min(durationSec, windowSec),
+				index: 1,
+				total: 1,
+				assetId: primaryAssetId,
+			},
+		];
+	}
+
+	return selected
+		.sort((a, b) => a.startSec - b.startSec)
+		.map((range, index, all) => ({
+			startSec: range.startSec,
+			endSec: range.endSec,
+			index: index + 1,
+			total: all.length,
+			assetId: range.assetId,
+			candidateGapSec: range.gapSec,
+		}));
+}
+
+/**
+ * Creator Edit always starts from the same bounded reads, so asking the model
+ * to discover them through separate tool turns only burns local inference time.
+ * Append them to the internal user message (not the chat transcript) and let
+ * the first model response perform the useful write.
+ */
+export function creatorEditContext(
+	document: AxcutDocument,
+	availableByAssetId: Record<string, boolean> | undefined,
+	range?: CreatorEditRange,
+): string {
+	const usedAssetIds = Array.from(new Set(document.timeline.clips.map((clip) => clip.assetId)));
+	const snapshot = JSON.stringify({
+		project: { id: document.project.id, title: document.project.title },
+		assets: document.assets
+			.filter((asset) => usedAssetIds.includes(asset.id))
+			.map((asset) => ({
+				id: asset.id,
+				label: asset.label,
+				durationSec: asset.durationSec ?? null,
+				hasTranscript:
+					document.transcripts.some((transcript) => transcript.assetId === asset.id) ||
+					document.transcript?.assetId === asset.id,
+				hasCameraTrack: asset.cameraTrack != null,
+				hasCursorTelemetry: availableByAssetId?.[asset.id] ?? null,
+			})),
+		clips: document.timeline.clips.map((clip, index) => ({
+			id: clip.id,
+			index,
+			assetId: clip.assetId,
+			reason: clip.reason,
+			sourceStartSec: clip.sourceStartSec,
+			sourceEndSec: clip.sourceEndSec ?? null,
+			timelineStartSec: clip.timelineStartSec,
+			timelineEndSec: clip.timelineEndSec,
+		})),
+		existingTrimRanges: document.timeline.trimRanges
+			.filter((trim) => !range || (trim.endSec > range.startSec && trim.startSec < range.endSec))
+			.map((trim) => ({
+				id: trim.id,
+				assetId: trim.assetId,
+				clipId: trim.clipId ?? null,
+				startSec: trim.startSec,
+				endSec: trim.endSec,
+			})),
+	});
+	const contextAssetIds = range?.assetId ? [range.assetId] : usedAssetIds;
+	const transcripts = contextAssetIds.map(
+		(assetId) =>
+			executeAgentTool(
+				document,
+				"getTranscript",
+				JSON.stringify({
+					assetId,
+					mode: "phrases",
+					limit: 1000,
+					...(range ? { startSec: range.startSec, endSec: range.endSec } : {}),
+				}),
+			).resultJson,
+	);
+	return [
+		"INTERNAL PRELOADED CONTEXT — these are tool results from the live document; do not request them again.",
+		...(range
+			? [
+					`WORK_RANGE_JSON=${JSON.stringify(range)}`,
+					"Apply semantic edits only for transcript material inside this source-time range. Do not add a trim outside it. Annotation and camera-fullscreen times remain virtual-timeline seconds and must map to a clip shown in the snapshot.",
+				]
+			: []),
+		`PROJECT_SNAPSHOT_JSON=${snapshot}`,
+		...transcripts.map((transcript, index) => `TRANSCRIPT_${index + 1}_JSON=${transcript}`),
+	].join("\n");
+}
+
 export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	getCurrentDocument:
-		"Read a compact snapshot of the current project: assets (with durations), timeline clips and trim ranges (source-time), and the zoom / speed / annotation effects (virtual, edited-timeline time). Call this before editing if the snapshot in the system prompt may be stale. The AxcutDocument is the single source of truth — your edits should preserve the user's placed clips and any timeline state they have already set up.",
+		"Read a compact snapshot of the current project: assets (with durations), timeline clips and trim ranges (source-time), and the zoom / speed / annotation effects (virtual, edited-timeline time). Dense effect lists are returned as a clearly labelled preview with total/nextOffset metadata; pass effectType plus offset/limit when exact ids or later effects are needed. Call this before editing if the snapshot may be stale. The AxcutDocument is the single source of truth — preserve the user's placed clips and existing timeline state.",
 	getTranscript:
-		"Read the transcript segments (speech and silence, with start/end seconds and text) for an asset. Omit assetId to read the primary asset's transcript.",
+		"Read the complete transcript for an asset. The default phrases mode groups word-level Whisper output into compact timed phrases and reports pauseAfterSec, retaining all spoken text with far less JSON overhead. Use words mode with startSec/endSec when exact word timings are needed. Results include explicit page.complete/nextOffset metadata; continue only when incomplete. Omit assetId for the primary asset.",
 	getCursorTrack:
 		"Read the recorded pointer track for an asset: where the cursor was over time, downsampled to a readable rate. Each point carries atSec (the asset's own source clock), virtualSec (the same instant on the edited timeline — the coordinate addZoom takes, null when no clip carries it), cx/cy as 0–1 fractions of the frame, and `shape`, an index into the pointer bitmaps the recording used (equal values are the same pointer; a change means the pointer changed, e.g. arrow to text caret). Points that are not plain moves carry `kind`; points a trim cuts out of playback carry `trimmed`. These are real samples, not a summary — reading what the pointer was doing is yours. Omit assetId for the primary asset. It answers `available:false` in two DIFFERENT ways you must not confuse: reason 'no-sidecar' means this asset was checked and genuinely has no telemetry, while reason 'unavailable' means it could not be read from here.",
 	addTrim:
@@ -158,7 +363,7 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Reorder a placed clip: move `clipId` so it plays just before `beforeClipId` (pass null, or omit it, to move it last). Ids come from getCurrentDocument, where each clip carries its `index` and its label in `reason`. This preserves every clip id, every source range, every trim, and the zooms / speed regions / annotations anchored to each clip. This is the tool for 'swap these clips', 'put X first' and 'change the clip order' — replaceTimeline cannot reorder anything.",
 	replaceTimeline:
 		"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a trim. The intervals are SORTED, so this can never reorder clips — use moveClip for that. DO NOT use this for 'cut silences' or 'remove pauses' — the user has likely placed clips on the timeline that you'd be discarding. Use this ONLY when the user explicitly asks you to rebuild the timeline from scratch (e.g. 'start over with the kept intervals from the transcript'). It is refused when it would merge away, shorten or drop an existing clip; the refusal names them and the tool to use instead.",
-	addZoom: `Add a zoom-in over a span of the edited timeline (virtual seconds). depth is an ORDINAL 1–6, not a factor: it selects a magnification from a fixed table (${ZOOM_DEPTH_LEGEND}), so the default depth 3 renders at 2.00×. The result reports renderedScale — quote that, never the depth, when telling the user how strong the zoom is. focus is the zoom centre in 0–1 fractions of the frame (default centre). When the recording's pointer telemetry can be read for the footage under the span, the result also carries \`cursorAnchor\`: \`focus\` echoes the value this call used (including the default, if you left it out), \`cursor\` is where the pointer ACTUALLY was over the span the zoom landed on — the median of the recorded samples, \`spread\` being how far the farthest one strays from it — and \`offset\` is the distance between the two, in frame fractions. It is a measurement, not a correction: nothing is moved and no call is refused over it, and a zoom framing a slide, a face, or a region the pointer never enters is a legitimate choice. \`available:false\` names what it found instead (\`no-samples\`, \`trimmed-out\`). Its ABSENCE means no telemetry was read for that footage — never that the recording has none; assets[].hasCursorTelemetry and getCursorTrack are what answer that. Use for 'zoom in on …' and the smart-zoom pass.`,
+	addZoom: `Add a zoom-in over a span of the edited timeline (virtual seconds). depth is an ORDINAL 1–6, not a factor: it selects a magnification from a fixed table (${ZOOM_DEPTH_LEGEND}), so the default depth ${DEFAULT_ZOOM_DEPTH} renders at ${ZOOM_DEPTH_SCALES[DEFAULT_ZOOM_DEPTH].toFixed(2)}×. The result reports renderedScale — quote that, never the depth, when telling the user how strong the zoom is. focus is the zoom centre in 0–1 fractions of the frame (default centre). When the recording's pointer telemetry can be read for the footage under the span, the result also carries \`cursorAnchor\`: \`focus\` echoes the value this call used (including the default, if you left it out), \`cursor\` is where the pointer ACTUALLY was over the span the zoom landed on — the median of the recorded samples, \`spread\` being how far the farthest one strays from it — and \`offset\` is the distance between the two, in frame fractions. It is a measurement, not a correction: nothing is moved and no call is refused over it, and a zoom framing a slide, a face, or a region the pointer never enters is a legitimate choice. \`available:false\` names what it found instead (\`no-samples\`, \`trimmed-out\`). Its ABSENCE means no telemetry was read for that footage — never that the recording has none; assets[].hasCursorTelemetry and getCursorTrack are what answer that. Use for 'zoom in on …' and the smart-zoom pass.`,
 	addZooms: `Add MANY zooms in one call: \`regions\` is a list, each entry taking exactly the fields addZoom takes (same depth table, ${ZOOM_DEPTH_LEGEND}). Use this for the smart-zoom pass, where you have decided every zoom before emitting the first one — sending them one at a time costs one round trip each. Each region stands or falls ALONE: one that covers no clip is refused by itself and listed in \`refused\` with its index and the reason, while the others are still applied. The result leads with requested / appliedCount / refusedCount, and each applied entry carries its renderedScale — quote that, never the depth — plus the same \`cursorAnchor\` addZoom reports, whenever the footage under that region has readable pointer telemetry.`,
 	setZoom: `Move, resize, or restyle an existing zoom by id (virtual-timeline seconds). Only the fields you pass are changed. depth selects from the same table (${ZOOM_DEPTH_LEGEND}); if the zoom carries a customScale (getCurrentDocument shows it as depthIsOverridden), that custom value is what renders, and passing depth clears it so the depth takes effect — the result says so. The result reports the resulting renderedScale, and — when the footage under the span has readable pointer telemetry — the same \`cursorAnchor\` addZoom reports, measured against the zoom's EFFECTIVE focus, so a call that moved only the span still learns what its unchanged focus is now looking at.`,
 	addSpeed:
@@ -328,7 +533,7 @@ export function buildTools(
 	const build = <S extends z.ZodType>(name: string, schema: S) =>
 		documentTool(holder, sink, name, schema, editsAllowed, runtime);
 	return [
-		build("getCurrentDocument", z.object({})),
+		build("getCurrentDocument", getCurrentDocumentArgs),
 		build("getTranscript", getTranscriptArgs),
 		build("getCursorTrack", getCursorTrackArgs),
 		build("addTrim", addTrimArgs),
@@ -389,6 +594,8 @@ export interface InvokeArgs {
 	/** Injected by `chat-service` from the Electron layer. Absent in tests and in
 	 *  the workbench unless one is supplied on purpose. */
 	cursor?: CursorTelemetryReader;
+	/** Bounded source-time window used by the automatic Creator Edit runner. */
+	creatorRange?: CreatorEditRange;
 }
 
 /** One cheap probe per asset, run before the tools are built so the very first
@@ -447,6 +654,99 @@ export interface InvokeResult {
 	reason?: string;
 }
 
+/**
+ * One bounded Creator Edit section needs exactly one model decision and at most
+ * one addTrims call. Running it through a ReAct graph would invoke the model a
+ * second time merely to narrate a tool result the executor already verified.
+ * This focused path binds the same real tool schema, executes the returned call
+ * through the same mutation gate, and writes the report from that verdict.
+ */
+export async function invokeOpenScreenCreatorEditRange(
+	args: InvokeArgs & { creatorRange: CreatorEditRange },
+): Promise<InvokeResult> {
+	const editsAllowed = args.editsAllowed !== false;
+	const chatModel = await createOpenScreenChatModel(args.model);
+	const availableByAssetId = await probeCursorTelemetry(args.document, args.cursor);
+	const holder: DocumentHolder = { current: args.document };
+	const addTrimsTool = buildTools(holder, args.sink, editsAllowed, {
+		cursor: args.cursor,
+		availableByAssetId,
+	}).find((candidate) => candidate.name === "addTrims");
+	const bindTools = (
+		chatModel as unknown as {
+			bindTools?: (tools: unknown[]) => {
+				invoke: (messages: unknown[]) => Promise<unknown>;
+			};
+		}
+	).bindTools;
+	if (!addTrimsTool || typeof bindTools !== "function") {
+		return invokeOpenScreenAgent(args);
+	}
+
+	try {
+		const bound = bindTools.call(chatModel, [addTrimsTool]);
+		const response = (await bound.invoke([
+			{ role: "system", content: buildCreatorSystemPrompt({ editsAllowed }) },
+			{
+				role: "user",
+				content: `${args.userMessage}\n\n${creatorEditContext(
+					args.document,
+					availableByAssetId,
+					args.creatorRange,
+				)}`,
+			},
+		])) as {
+			content?: unknown;
+			tool_calls?: Array<{ name?: string; args?: unknown }>;
+		};
+		const call = response.tool_calls?.find((candidate) => candidate.name === "addTrims");
+		if (!call) {
+			const text = messageContentToText(response.content).trim();
+			return {
+				text:
+					text ||
+					`Section ${args.creatorRange.index}/${args.creatorRange.total}: no safe cut was identified.`,
+				document: args.document,
+				mutated: false,
+			};
+		}
+
+		let toolArgs = call.args ?? {};
+		if (typeof toolArgs === "string") {
+			try {
+				toolArgs = JSON.parse(toolArgs);
+			} catch {
+				toolArgs = {};
+			}
+		}
+		args.sink.toolStart("addTrims", toolArgs);
+		const execution = executeAgentTool(args.document, "addTrims", JSON.stringify(toolArgs), {
+			editsAllowed,
+			cursorTelemetry: { availableByAssetId },
+		});
+		args.sink.toolEnd("addTrims", execution.ok, execution.summary);
+		let payload: Record<string, unknown> = {};
+		try {
+			payload = JSON.parse(execution.resultJson) as Record<string, unknown>;
+		} catch {
+			payload = { result: execution.resultJson };
+		}
+		const report = execution.ok
+			? (execution.summary ??
+				`applied ${String(payload.appliedCount ?? "the selected")} high-confidence cut(s)`)
+			: `made no change: ${String(payload.error ?? "the proposed cuts were refused")}`;
+		return {
+			text: `Section ${args.creatorRange.index}/${args.creatorRange.total}: ${report}.`,
+			document: execution.document ?? args.document,
+			mutated: execution.document !== undefined,
+		};
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		args.sink.error(reason);
+		return { text: "", document: args.document, mutated: false, reason };
+	}
+}
+
 export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeResult> {
 	const { document, model, history, userMessage, sink } = args;
 	const editsAllowed = args.editsAllowed !== false;
@@ -460,14 +760,19 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	// `checkpointer`; for v1 each turn is single-shot.
 	const chatModel = await createOpenScreenChatModel(model);
 	const availableByAssetId = await probeCursorTelemetry(document, args.cursor);
+	const selectedToolNames = toolNamesForTurn(userMessage);
+	const creatorEditTurn = selectedToolNames === CREATOR_EDIT_TOOL_NAMES;
+	const allowedToolNames = new Set(selectedToolNames);
 	const tools = buildTools(holder, sink, editsAllowed, {
 		cursor: args.cursor,
 		availableByAssetId,
-	});
+	}).filter((candidate) => allowedToolNames.has(candidate.name));
 	const agent = createAgent({
 		model: chatModel,
 		tools,
-		systemPrompt: buildSystemPrompt({ editsAllowed }),
+		systemPrompt: creatorEditTurn
+			? buildCreatorSystemPrompt({ editsAllowed })
+			: buildSystemPrompt({ editsAllowed }),
 		middleware: anthropicCachingMiddleware(chatModel),
 	}).withConfig({
 		// ponytail: NOT optional. LangGraph's default is 25 steps, and an
@@ -481,7 +786,10 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		recursionLimit: 1000,
 	});
 
-	const messages = [...history, { role: "user" as const, content: userMessage }];
+	const internalUserMessage = creatorEditTurn
+		? `${userMessage}\n\n${creatorEditContext(document, availableByAssetId, args.creatorRange)}`
+		: userMessage;
+	const messages = [...history, { role: "user" as const, content: internalUserMessage }];
 
 	// ponytail: declared outside the try block so the catch handler can
 	// include any chunks we already saw in the diagnostic when the stream

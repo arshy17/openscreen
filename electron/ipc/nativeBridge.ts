@@ -499,6 +499,33 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									request.payload.assetId,
 								),
 							);
+						case "document.snapshot.list":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.listSnapshots(request.payload.projectId),
+							);
+						case "document.snapshot.create":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.createSnapshot(
+									request.payload.projectId,
+									request.payload.label,
+									request.payload.reason,
+								),
+							);
+						case "document.snapshot.restore":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.restoreSnapshot(
+									request.payload.projectId,
+									request.payload.snapshotId,
+								),
+							);
+						case "document.collectMedia":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.collectMedia(request.payload.projectId),
+							);
 						case "llm.getSnapshot":
 							return createSuccessResponse(requestId, await aiEditionService.llmGetSnapshot());
 						case "llm.setConfig":
@@ -528,6 +555,11 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 							return createSuccessResponse(
 								requestId,
 								await aiEditionService.llmListProviderModels(request.payload.providerId),
+							);
+						case "privacy.classifyNames":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.classifyPrivacyNames(request.payload.candidates),
 							);
 						case "chat.run": {
 							const sessionId = request.payload.sessionId;

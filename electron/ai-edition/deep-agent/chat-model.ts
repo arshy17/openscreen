@@ -18,6 +18,7 @@ import { ChatMistralAI } from "@langchain/mistralai";
 import { ChatOpenAI } from "@langchain/openai";
 import {
 	getProviderDefinition,
+	isLocalOpenAICompatible,
 	normalizeProviderId,
 	type ProviderDefinition,
 } from "../provider-registry";
@@ -305,6 +306,30 @@ export const OPENAI_COMPATIBLE_NO_AUTH_API_KEY = "openscreen-openai-compatible-n
 // would truncate outputs that are uncapped today.
 export const ANTHROPIC_API_MAX_OUTPUT_TOKENS = 16_384;
 
+/**
+ * Ollama's Qwen templates enable their highest reasoning level when the
+ * OpenAI-compatible request omits `reasoning_effort`. That is a poor default
+ * for an interactive editor: even a one-tool document read can sit on the
+ * generic "Thinking…" state for minutes before the first tool call. Keep the
+ * user's chosen model, but give loopback Qwen endpoints an explicit low-effort
+ * default and turn off hidden chain-of-thought for that interactive default.
+ * Ollama still returns normal tool calls with `think:false`; it simply avoids
+ * spending tens of seconds on an invisible preamble before each graph step.
+ * An explicit medium/high selection keeps thinking enabled. Other compatible
+ * servers are untouched because they may reject provider-specific fields.
+ */
+export function localOpenAICompatibleModelKwargs(
+	config: OpenScreenChatModelConfig,
+): Record<string, unknown> {
+	if (!isLocalOpenAICompatible(config.provider, config.baseUrl)) return {};
+	if (!/^qwen(?:\d|[.:_-])/i.test(config.model.trim())) return {};
+
+	const requested = config.reasoningEffort?.trim().toLowerCase();
+	if (requested === "medium") return { reasoning_effort: "medium" };
+	if (requested === "high" || requested === "xhigh") return { reasoning_effort: "high" };
+	return { reasoning_effort: "low", think: false };
+}
+
 // ponytail: LangChain's default-maxTokens table knows every released
 // claude-* slug with its real per-model limit (4096 for claude-3-haiku,
 // 16384 for 4.x/5.x) — trust it. Overriding with a flat 16k would exceed a
@@ -416,12 +441,16 @@ export async function createOpenScreenChatModel(
 				? config.baseUrl || "https://generativelanguage.googleapis.com/v1beta/openai"
 				: config.baseUrl;
 	const apiKey = resolveOpenAIChatApiKey(config.provider, config.apiKey);
+	const modelKwargs = {
+		...(reasoningOptions.modelKwargs ?? {}),
+		...localOpenAICompatibleModelKwargs(config),
+	};
 	return new ChatOpenAI({
 		...(apiKey ? { apiKey } : {}),
 		model: config.model,
 		...(reasoningOptions.reasoning ? { reasoning: reasoningOptions.reasoning } : {}),
 		...(reasoningOptions.useResponsesApi ? { useResponsesApi: true } : {}),
-		...(reasoningOptions.modelKwargs ? { modelKwargs: reasoningOptions.modelKwargs } : {}),
+		...(Object.keys(modelKwargs).length > 0 ? { modelKwargs } : {}),
 		// ponytail: Gemini's OpenAI-compat path can't stream + tool-call at once
 		// — disable streaming so the ChatOpenAI compat layer buffers and returns
 		// cleanly. axcut does the same.

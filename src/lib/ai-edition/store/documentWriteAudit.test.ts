@@ -131,6 +131,13 @@ const DECLARED: WritePath[] = [
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleRenameProject", "save", "gesture"),
 	// Ctrl+S / File > Save.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleSave", "save", "gesture"),
+	// Double-clicking a timed transcript word, then committing its correction.
+	w(
+		"src/components/ai-edition/NewEditorShell.tsx",
+		"handleUpdateTranscriptWord",
+		"save",
+		"gesture",
+	),
 	// "Save" chosen on the way out of Ctrl+N and Ctrl+O.
 	w("src/components/ai-edition/NewEditorShell.tsx", "onKey", "save", "gesture"),
 	w("src/components/ai-edition/NewEditorShell.tsx", "onKey", "save", "gesture"),
@@ -143,6 +150,25 @@ const DECLARED: WritePath[] = [
 	// Auto-enhance > Quick Style: one click applies the selected creator theme as
 	// one undoable document edit (format, captions, and optional visual cues).
 	w("src/components/ai-edition/v4/V4Timeline.tsx", "runQuickCreatorStyle", "save", "gesture"),
+
+	// Creator Toolkit writes are all explicit Apply clicks. Five panels use the
+	// short local name `apply` (plan, layout, privacy, audio and brand kits),
+	// tracked privacy has `applyTracked`, confirmed Vision candidates have
+	// `applyVisionMasks`, and templates share `applyDocument`.
+	// Every one is a single undoable user gesture.
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "apply", "save", "gesture"),
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "apply", "save", "gesture"),
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "apply", "save", "gesture"),
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "apply", "save", "gesture"),
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "apply", "save", "gesture"),
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "applyDocument", "save", "gesture"),
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "applyTracked", "save", "gesture"),
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "applyVisionMasks", "save", "gesture"),
+	// Creating a clip/social variant is a user gesture, but the write populates a
+	// freshly-created project and deliberately records no undo snapshot inside that
+	// empty shell. The source project is never mutated.
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "createThemes", "save", "automatic"),
+	w("src/components/ai-edition/v4/CreatorToolkitDialog.tsx", "createVariant", "save", "automatic"),
 
 	// The agent's document. The optimistic write is not the edit — the save is, and
 	// it names the pre-agent document as what Ctrl+Z returns to.

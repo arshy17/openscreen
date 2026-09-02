@@ -12,7 +12,11 @@ import {
 	type AiEditionLlmDisconnectResult,
 	type AiEditionLlmProviderModelsResult,
 	type AiEditionLlmSnapshot,
+	type AiEditionPortableProjectResult,
+	type AiEditionPrivacyNameClassificationResult,
+	type AiEditionProjectSnapshotSummary,
 	type AiEditionProjectSummary,
+	type AiEditionSnapshotReason,
 	type CursorCapabilities,
 	type CursorRecordingData,
 	type CursorTelemetryPoint,
@@ -193,6 +197,30 @@ export const nativeBridgeClient = {
 				action: "document.removeAsset",
 				payload: { projectId, assetId },
 			}),
+		listSnapshots: (projectId: string) =>
+			requireNativeBridgeData<AiEditionProjectSnapshotSummary[]>({
+				domain: "aiEdition",
+				action: "document.snapshot.list",
+				payload: { projectId },
+			}),
+		createSnapshot: (projectId: string, label?: string, reason?: AiEditionSnapshotReason) =>
+			requireNativeBridgeData<AiEditionProjectSnapshotSummary>({
+				domain: "aiEdition",
+				action: "document.snapshot.create",
+				payload: { projectId, label, reason },
+			}),
+		restoreSnapshot: (projectId: string, snapshotId: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "document.snapshot.restore",
+				payload: { projectId, snapshotId },
+			}),
+		collectMedia: (projectId: string) =>
+			requireNativeBridgeData<AiEditionPortableProjectResult>({
+				domain: "aiEdition",
+				action: "document.collectMedia",
+				payload: { projectId },
+			}),
 		llmGetSnapshot: () =>
 			requireNativeBridgeData<AiEditionLlmSnapshot>({
 				domain: "aiEdition",
@@ -227,6 +255,12 @@ export const nativeBridgeClient = {
 				domain: "aiEdition",
 				action: "llm.listProviderModels",
 				payload: { providerId },
+			}),
+		classifyPrivacyNames: (candidates: Array<{ id: string; text: string }>) =>
+			requireNativeBridgeData<AiEditionPrivacyNameClassificationResult>({
+				domain: "aiEdition",
+				action: "privacy.classifyNames",
+				payload: { candidates },
 			}),
 		chatRun: (
 			projectId: string,

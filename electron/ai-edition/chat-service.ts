@@ -395,23 +395,78 @@ export async function runChat(
 		error: (message: string) => emit.error(message),
 	};
 
-	const { invokeOpenScreenAgent } = await import("./deep-agent/service");
+	const {
+		creatorEditRanges,
+		invokeOpenScreenAgent,
+		invokeOpenScreenCreatorEditRange,
+		isCreatorEditMessage,
+	} = await import("./deep-agent/service");
+	const model = {
+		provider: config.provider,
+		model: config.model,
+		apiKey: apiKey ?? undefined,
+		baseUrl: config.baseUrl,
+		reasoningEffort: config.reasoningEffort,
+	};
+	const initialDocument = workingDocument ?? emptyDocumentForTextOnly(projectId);
 
-	const result = await invokeOpenScreenAgent({
-		document: workingDocument ?? emptyDocumentForTextOnly(projectId),
-		model: {
-			provider: config.provider,
-			model: config.model,
-			apiKey: apiKey ?? undefined,
-			baseUrl: config.baseUrl,
-			reasoningEffort: config.reasoningEffort,
-		},
-		history,
-		userMessage: message,
-		sink: agentSink,
-		editsAllowed,
-		cursor: env.cursor,
-	});
+	let result: Awaited<ReturnType<typeof invokeOpenScreenAgent>>;
+	if (workingDocument && isCreatorEditMessage(message)) {
+		const ranges = creatorEditRanges(workingDocument);
+		let currentDocument = workingDocument;
+		let mutated = false;
+		const reports: string[] = [];
+		let failureReason: string | undefined;
+
+		for (const range of ranges) {
+			agentSink.thinking(
+				`Creator Edit: analysing section ${range.index}/${range.total} (${Math.round(range.startSec)}–${Math.round(range.endSec)}s)…\n`,
+			);
+			const pass = await invokeOpenScreenCreatorEditRange({
+				document: currentDocument,
+				model,
+				// The Creator Edit prompt and preloaded range are self-contained. Replaying
+				// the chat history for every section only multiplies local-model context.
+				history: [],
+				userMessage: message,
+				sink: agentSink,
+				editsAllowed,
+				cursor: env.cursor,
+				creatorRange: range,
+			});
+			currentDocument = pass.document;
+			mutated ||= pass.mutated;
+			if (pass.text) reports.push(`Section ${range.index}/${range.total}: ${pass.text}`);
+			if (!pass.text) {
+				failureReason = pass.reason ?? `Creator Edit stopped in section ${range.index}.`;
+				break;
+			}
+		}
+
+		result = failureReason
+			? reports.length > 0
+				? {
+						text: `Creator Edit completed ${reports.length}/${ranges.length} sections, then stopped: ${failureReason}\n\n${reports.join("\n\n")}`,
+						document: currentDocument,
+						mutated,
+					}
+				: { text: "", document: currentDocument, mutated, reason: failureReason }
+			: {
+					text: `Creator Edit completed ${ranges.length} sections.\n\n${reports.join("\n\n")}`,
+					document: currentDocument,
+					mutated,
+				};
+	} else {
+		result = await invokeOpenScreenAgent({
+			document: initialDocument,
+			model,
+			history,
+			userMessage: message,
+			sink: agentSink,
+			editsAllowed,
+			cursor: env.cursor,
+		});
+	}
 
 	if (!result.text) {
 		// ponytail: surface the deep-agent's diagnostic so the user can see

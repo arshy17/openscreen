@@ -589,4 +589,75 @@ describe("DocumentService", () => {
 			expect((await service.getProject(doc.project.id)).annotations).toHaveLength(7);
 		});
 	});
+
+	describe("recovery points and portable projects", () => {
+		it("creates a restore point and restores it without losing the state being replaced", async () => {
+			const original = await service.createProject("Recovery demo");
+			const checkpoint = await service.createSnapshot(
+				original.project.id,
+				"Before experiment",
+				"manual",
+			);
+			await service.saveProject({
+				...original,
+				project: { ...original.project, title: "Changed title" },
+			});
+
+			const restored = await service.restoreSnapshot(original.project.id, checkpoint.id);
+			expect(restored.project.title).toBe("Recovery demo");
+			const snapshots = await service.listSnapshots(original.project.id);
+			expect(snapshots.some((item) => item.reason === "restore")).toBe(true);
+			expect(snapshots.some((item) => item.label === "Before experiment")).toBe(true);
+		});
+
+		it("opens the newest valid recovery point when the canonical JSON is damaged", async () => {
+			const doc = await service.createProject("Crash-safe");
+			await service.createSnapshot(doc.project.id, "Known good", "manual");
+			await fs.writeFile(path.join(tempDir, `${doc.project.id}.openscreen`), "{broken", "utf8");
+
+			await expect(service.getProject(doc.project.id)).resolves.toMatchObject({
+				project: { title: "Crash-safe" },
+			});
+		});
+
+		it("collects screen, webcam, and music into one checksum manifest", async () => {
+			const portableRoot = path.join(tempDir, "portable-output");
+			const portableService = new DocumentService(tempDir, mediaDir, portableRoot);
+			const screenPath = path.join(mediaDir, "screen.mp4");
+			const webcamPath = path.join(mediaDir, "camera.mp4");
+			const musicPath = path.join(mediaDir, "bed.wav");
+			await fs.writeFile(screenPath, "screen");
+			await fs.writeFile(webcamPath, "camera");
+			await fs.writeFile(musicPath, "music");
+			const doc = await portableService.createProject("Portable / demo");
+			const asset: AxcutAsset = {
+				id: "asset_portable",
+				kind: "video",
+				label: "screen.mp4",
+				originalPath: screenPath,
+				cameraTrack: { sourcePath: webcamPath, startMs: 0, offsetMs: 0, visible: true },
+			};
+			await portableService.saveProject({
+				...doc,
+				assets: [asset],
+				project: { ...doc.project, primaryAssetId: asset.id },
+				legacyEditor: { backgroundMusicPath: musicPath },
+			});
+
+			const result = await portableService.collectProjectMedia(doc.project.id);
+			expect(result.mediaCount).toBe(3);
+			const manifest = JSON.parse(await fs.readFile(result.manifestPath, "utf8"));
+			expect(manifest.media).toHaveLength(3);
+			expect(manifest.media.every((item: { sha256: string }) => item.sha256.length === 64)).toBe(
+				true,
+			);
+			const portable = JSON.parse(
+				await fs.readFile(path.join(result.path, "project.openscreen"), "utf8"),
+			) as AxcutDocument;
+			expect(portable.assets[0]?.originalPath).toContain(path.join("Media", "screen.mp4"));
+			expect(portable.assets[0]?.cameraTrack?.sourcePath).toContain(
+				path.join("Media", "camera.mp4"),
+			);
+		});
+	});
 });

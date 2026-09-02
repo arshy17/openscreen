@@ -32,10 +32,34 @@ type ShimDesktopSource = {
 	appIcon: string | null;
 };
 const SHIM_SOURCES: ShimDesktopSource[] = [
-	{ id: "screen:0", name: "Entire Screen", display_id: "0", thumbnail: null, appIcon: null },
-	{ id: "screen:1", name: "Display 2", display_id: "1", thumbnail: null, appIcon: null },
-	{ id: "window:100", name: "OpenScreen", display_id: "", thumbnail: null, appIcon: null },
-	{ id: "window:101", name: "Terminal", display_id: "", thumbnail: null, appIcon: null },
+	{
+		id: "screen:0",
+		name: "Entire Screen",
+		display_id: "0",
+		thumbnail: null,
+		appIcon: null,
+	},
+	{
+		id: "screen:1",
+		name: "Display 2",
+		display_id: "1",
+		thumbnail: null,
+		appIcon: null,
+	},
+	{
+		id: "window:100",
+		name: "OpenScreen",
+		display_id: "",
+		thumbnail: null,
+		appIcon: null,
+	},
+	{
+		id: "window:101",
+		name: "Terminal",
+		display_id: "",
+		thumbnail: null,
+		appIcon: null,
+	},
 ];
 let shimSelectedSource: ShimDesktopSource | null = null;
 
@@ -46,6 +70,7 @@ type ShimRecordingPrefs = {
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
+	hideDesktopIcons: boolean;
 	cursorCaptureMode: "editable-overlay" | "system";
 };
 const recordingPrefsStorageKey = "browser-shim-recording-prefs";
@@ -56,6 +81,7 @@ let shimRecordingPrefs: ShimRecordingPrefs = {
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,
+	hideDesktopIcons: false,
 	cursorCaptureMode: "editable-overlay",
 };
 (() => {
@@ -97,9 +123,45 @@ function pickVideoFileViaInput(): Promise<PickVideoResult> {
 				finish({ success: false, canceled: true });
 				return;
 			}
-			finish({ success: true, canceled: false, path: URL.createObjectURL(file), name: file.name });
+			finish({
+				success: true,
+				canceled: false,
+				path: URL.createObjectURL(file),
+				name: file.name,
+			});
 		});
 		// Chrome fires this when the picker is dismissed without a selection.
+		input.addEventListener("cancel", () => finish({ success: false, canceled: true }));
+		document.body.appendChild(input);
+		input.click();
+	});
+}
+
+function pickAudioFileViaInput(): Promise<PickVideoResult> {
+	return new Promise((resolve) => {
+		const input = document.createElement("input");
+		input.type = "file";
+		input.accept =
+			"audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/flac,audio/ogg,audio/opus,audio/*";
+		input.style.position = "fixed";
+		input.style.top = "-9999px";
+		let settled = false;
+		const finish = (result: PickVideoResult) => {
+			if (settled) return;
+			settled = true;
+			input.remove();
+			resolve(result);
+		};
+		input.addEventListener("change", () => {
+			const file = input.files?.[0];
+			if (!file) return finish({ success: false, canceled: true });
+			finish({
+				success: true,
+				canceled: false,
+				path: URL.createObjectURL(file),
+				name: file.name,
+			});
+		});
 		input.addEventListener("cancel", () => finish({ success: false, canceled: true }));
 		document.body.appendChild(input);
 		input.click();
@@ -110,6 +172,13 @@ function createShimElectronAPI() {
 	return {
 		assetBaseUrl: "",
 		openVideoFilePicker: pickVideoFileViaInput,
+		openAudioFilePicker: pickAudioFileViaInput,
+		analyzePrivacyVision: () =>
+			Promise.resolve({
+				success: false as const,
+				unavailable: true,
+				error: "Visual privacy detection requires the installed macOS app.",
+			}),
 		openProjectFile: () => Promise.resolve({ success: false, canceled: true }),
 		pickExportSavePath: () => Promise.resolve({ success: false, canceled: true }),
 		writeExportToPath: () => Promise.resolve({ success: false }),
@@ -186,7 +255,12 @@ function createShimBridgeClient() {
 			updatedAt: string;
 			primaryAssetId?: string;
 		};
-		assets: Array<{ id: string; kind: "video"; label: string; originalPath: string }>;
+		assets: Array<{
+			id: string;
+			kind: "video";
+			label: string;
+			originalPath: string;
+		}>;
 		[key: string]: unknown;
 	};
 	const projectsStorageKey = "browser-shim-projects-v2";
@@ -302,7 +376,12 @@ function createShimBridgeClient() {
 		projectId: string;
 		title: string;
 		createdAt: string;
-		messages: Array<{ id: string; role: "user" | "assistant"; content: string; createdAt: string }>;
+		messages: Array<{
+			id: string;
+			role: "user" | "assistant";
+			content: string;
+			createdAt: string;
+		}>;
 	};
 	const chatStorageKey = "browser-shim-chat-v1";
 	const sessionsByProject = new Map<string, Map<string, ShimSession>>();
@@ -395,7 +474,11 @@ function createShimBridgeClient() {
 			},
 			save: (doc: ShimDocument) => {
 				const id = doc?.project?.id;
-				if (!id) return Promise.resolve({ success: false, error: "Document has no project id" });
+				if (!id)
+					return Promise.resolve({
+						success: false,
+						error: "Document has no project id",
+					});
 				documentsByProject[id] = doc;
 				if (!projectOrder.includes(id)) projectOrder.unshift(id);
 				saveProjectsState();
@@ -420,7 +503,10 @@ function createShimBridgeClient() {
 				const next: ShimDocument = {
 					...doc,
 					assets: [...doc.assets, asset],
-					project: { ...doc.project, primaryAssetId: doc.project.primaryAssetId ?? assetId },
+					project: {
+						...doc.project,
+						primaryAssetId: doc.project.primaryAssetId ?? assetId,
+					},
 				};
 				documentsByProject[projectId] = next;
 				saveProjectsState();
@@ -429,7 +515,10 @@ function createShimBridgeClient() {
 			removeAsset: (projectId: string, assetId: string) => {
 				const doc = documentsByProject[projectId];
 				if (!doc) return Promise.resolve({ assetId, document: null });
-				const next: ShimDocument = { ...doc, assets: doc.assets.filter((a) => a.id !== assetId) };
+				const next: ShimDocument = {
+					...doc,
+					assets: doc.assets.filter((a) => a.id !== assetId),
+				};
 				documentsByProject[projectId] = next;
 				saveProjectsState();
 				return Promise.resolve({ assetId, document: next });
@@ -593,7 +682,11 @@ function createShimBridgeClient() {
 				if (!s) return Promise.resolve(null);
 				const chars = s.messages.reduce((acc, m) => acc + m.content.length, 0);
 				const used = Math.ceil(chars / 4);
-				return Promise.resolve({ usedTokens: used, budgetTokens: 80_000, ratio: used / 80_000 });
+				return Promise.resolve({
+					usedTokens: used,
+					budgetTokens: 80_000,
+					ratio: used / 80_000,
+				});
 			},
 			chatCompact: (projectId: string, sessionId: string) => {
 				// ponytail: browser shim is a no-op compaction — it just hand-summarizes

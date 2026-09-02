@@ -55,6 +55,7 @@ import { trimAppliesToClip } from "../../src/lib/ai-edition/timeline/trim-mappin
 // scale table was moved out of `components/video-editor/types.ts` to be
 // reachable from here at all.
 import {
+	DEFAULT_ZOOM_DEPTH,
 	effectiveZoomScale,
 	ZOOM_DEPTH_LEGEND,
 } from "../../src/lib/ai-edition/timeline/zoom-scale";
@@ -424,8 +425,21 @@ export const moveClipArgs = z.object({
 	beforeClipId: z.string().min(1).nullish(),
 });
 
+export const getCurrentDocumentArgs = z.object({
+	effectType: z
+		.enum(["zoomRanges", "speedRegions", "annotations", "cameraFullscreenRegions"])
+		.optional(),
+	offset: z.number().int().min(0).default(0),
+	limit: z.number().int().min(1).max(100).default(50),
+});
+
 export const getTranscriptArgs = z.object({
 	assetId: z.string().min(1).optional(),
+	mode: z.enum(["phrases", "words"]).default("phrases"),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	offset: z.number().int().min(0).default(0),
+	limit: z.number().int().min(1).max(1000).default(500),
 });
 
 // ponytail: an assetId, never a path. The model names a row of the document and
@@ -448,7 +462,7 @@ const annotationBackgroundSchema = z.union([hexColorSchema, z.literal("transpare
 export const addZoomArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
-	depth: depthSchema.default(3),
+	depth: depthSchema.default(DEFAULT_ZOOM_DEPTH),
 	focus: focusSchema.default({ cx: 0.5, cy: 0.5 }),
 });
 
@@ -760,9 +774,47 @@ function captionPreset(
 //     migrated v1.7 project carries `customScale`, `depth` is inert and nothing
 //     said so. `renderedScale` is `effectiveZoomScale`, the renderer's own
 //     function, so the number the model reports is the number the viewer sees.
+type EffectDetailType = z.infer<typeof getCurrentDocumentArgs>["effectType"];
+
+interface DocumentSnapshotOptions {
+	effectType?: EffectDetailType;
+	offset?: number;
+	limit?: number;
+}
+
+const DENSE_EFFECT_PREVIEW_LIMIT = 8;
+const DENSE_EFFECT_THRESHOLD = 40;
+
+function effectPage<T>(
+	values: T[],
+	type: Exclude<EffectDetailType, undefined>,
+	options: DocumentSnapshotOptions,
+): { values: T[]; page: Record<string, unknown> } {
+	const requested = options.effectType === type;
+	const offset = requested ? (options.offset ?? 0) : 0;
+	const limit = requested
+		? Math.min(100, Math.max(1, options.limit ?? 50))
+		: values.length > DENSE_EFFECT_THRESHOLD
+			? DENSE_EFFECT_PREVIEW_LIMIT
+			: values.length;
+	const pageValues = values.slice(offset, offset + limit);
+	const nextOffset = offset + pageValues.length;
+	return {
+		values: pageValues,
+		page: {
+			total: values.length,
+			offset,
+			returned: pageValues.length,
+			complete: nextOffset >= values.length,
+			...(nextOffset < values.length ? { nextOffset } : {}),
+		},
+	};
+}
+
 export function documentSnapshotForModel(
 	document: AxcutDocument,
 	cursorTelemetry?: CursorTelemetryContext,
+	options: DocumentSnapshotOptions = {},
 ): Record<string, unknown> {
 	const availability = cursorTelemetry?.availableByAssetId;
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
@@ -781,6 +833,49 @@ export function documentSnapshotForModel(
 	// EFFECTIVE mode and the flag that decides it.
 	const autoFocusAll = legacy?.autoFocusAll === true;
 	const captions = captionSettingsFor(document);
+	const zoomRanges = coalesceForAgent(document.zoomRanges).map((z) => ({
+		id: z.id,
+		startSec: roundSec(z.startMs),
+		endSec: roundSec(z.endMs),
+		depth: z.depth,
+		renderedScale: effectiveZoomScale(z),
+		...(z.customScale != null ? { customScale: z.customScale, depthIsOverridden: true } : {}),
+		...(z.rotationPreset ? { rotationPreset: z.rotationPreset } : {}),
+		focus: z.focus,
+		focusMode: autoFocusAll ? "auto" : (z.focusMode ?? "manual"),
+		source: z.source ?? "manual",
+	}));
+	const projectedSpeedRegions = coalesceForAgent(speedRegions).map((s) => ({
+		id: s.id,
+		startSec: roundSec(s.startMs),
+		endSec: roundSec(s.endMs),
+		speed: s.speed,
+	}));
+	const annotations = coalesceForAgent(document.annotations).map((a) => ({
+		id: a.id,
+		startSec: roundSec(a.startMs),
+		endSec: roundSec(a.endMs),
+		type: a.type,
+		text: a.textContent ?? a.content ?? "",
+		position: a.position,
+		fontSize: a.style.fontSize,
+		color: a.style.color,
+		backgroundColor: a.style.backgroundColor,
+		animation: a.style.textAnimation ?? "none",
+	}));
+	const projectedCameraFullscreenRegions = coalesceForAgent(cameraFullscreenRegions).map((c) => ({
+		id: c.id,
+		startSec: roundSec(c.startMs),
+		endSec: roundSec(c.endMs),
+	}));
+	const zoomPage = effectPage(zoomRanges, "zoomRanges", options);
+	const speedPage = effectPage(projectedSpeedRegions, "speedRegions", options);
+	const annotationPage = effectPage(annotations, "annotations", options);
+	const cameraPage = effectPage(
+		projectedCameraFullscreenRegions,
+		"cameraFullscreenRegions",
+		options,
+	);
 	return {
 		timeBaseNote:
 			"clips and trims are in source-time seconds; zooms, speedRegions, annotations and cameraFullscreenRegions are in virtual (edited-timeline) seconds.",
@@ -842,50 +937,105 @@ export function documentSnapshotForModel(
 			endSec: s.endSec,
 			reason: s.reason,
 		})),
-		zoomRanges: coalesceForAgent(document.zoomRanges).map((z) => ({
-			id: z.id,
-			startSec: roundSec(z.startMs),
-			endSec: roundSec(z.endMs),
-			depth: z.depth,
-			renderedScale: effectiveZoomScale(z),
-			// Emitted only when set: an unconditional `customScale: null` on every
-			// zoom of every snapshot is noise the reader learns to skip, which is
-			// how the field would go unnoticed again.
-			...(z.customScale != null ? { customScale: z.customScale, depthIsOverridden: true } : {}),
-			...(z.rotationPreset ? { rotationPreset: z.rotationPreset } : {}),
-			focus: z.focus,
-			focusMode: autoFocusAll ? "auto" : (z.focusMode ?? "manual"),
-			source: z.source ?? "manual",
-		})),
-		speedRegions: coalesceForAgent(speedRegions).map((s) => ({
-			id: s.id,
-			startSec: roundSec(s.startMs),
-			endSec: roundSec(s.endMs),
-			speed: s.speed,
-		})),
-		annotations: coalesceForAgent(document.annotations).map((a) => ({
-			id: a.id,
-			startSec: roundSec(a.startMs),
-			endSec: roundSec(a.endMs),
-			type: a.type,
-			text: a.textContent ?? a.content ?? "",
-			position: a.position,
-			fontSize: a.style.fontSize,
-			color: a.style.color,
-			backgroundColor: a.style.backgroundColor,
-			animation: a.style.textAnimation ?? "none",
-		})),
-		cameraFullscreenRegions: coalesceForAgent(cameraFullscreenRegions).map((c) => ({
-			id: c.id,
-			startSec: roundSec(c.startMs),
-			endSec: roundSec(c.endMs),
-		})),
+		effectDetailNote:
+			"Each effect list is complete when effectPages.<name>.complete is true. Dense lists are previewed; call getCurrentDocument again with effectType, offset and limit to page exact ids and spans.",
+		effectPages: {
+			zoomRanges: zoomPage.page,
+			speedRegions: speedPage.page,
+			annotations: annotationPage.page,
+			cameraFullscreenRegions: cameraPage.page,
+		},
+		zoomRanges: zoomPage.values,
+		speedRegions: speedPage.values,
+		annotations: annotationPage.values,
+		cameraFullscreenRegions: cameraPage.values,
 		hasTranscript: document.transcripts.length > 0 || document.transcript !== null,
 	};
 }
 
 function failure(message: string): AgentToolExecution {
 	return { ok: false, resultJson: JSON.stringify({ error: message }) };
+}
+
+interface ModelTranscriptSegment {
+	id: string;
+	kind: string;
+	startSec: number;
+	endSec: number;
+	text: string;
+}
+
+/**
+ * Word-level Whisper output is exact but extremely verbose on the wire: a
+ * 27-minute recording can exceed 700 kB before the model sees the tool schema.
+ * Group speech into bounded phrases while retaining source-time edges and the
+ * pause after each phrase. The complete spoken text remains present, but the
+ * JSON overhead falls by roughly an order of magnitude.
+ */
+function transcriptPhrases(segments: ModelTranscriptSegment[]): Array<Record<string, unknown>> {
+	const phrases: Array<{
+		id: string;
+		kind: string;
+		startSec: number;
+		endSec: number;
+		text: string;
+		sourceSegmentCount: number;
+	}> = [];
+	let current: (typeof phrases)[number] | null = null;
+
+	const flush = () => {
+		if (!current) return;
+		phrases.push(current);
+		current = null;
+	};
+
+	for (const segment of segments) {
+		if (segment.kind !== "speech") {
+			flush();
+			phrases.push({
+				id: segment.id,
+				kind: segment.kind,
+				startSec: roundSec(segment.startSec * 1000),
+				endSec: roundSec(segment.endSec * 1000),
+				text: segment.text,
+				sourceSegmentCount: 1,
+			});
+			continue;
+		}
+
+		const gap = current ? segment.startSec - current.endSec : 0;
+		const shouldBreak =
+			current != null &&
+			(gap >= 0.9 ||
+				segment.endSec - current.startSec > 8 ||
+				/[.!?]["')\]]?$/.test(current.text.trim()));
+		if (shouldBreak) flush();
+
+		if (!current) {
+			current = {
+				id: segment.id,
+				kind: "speech",
+				startSec: roundSec(segment.startSec * 1000),
+				endSec: roundSec(segment.endSec * 1000),
+				text: segment.text.trim(),
+				sourceSegmentCount: 1,
+			};
+		} else {
+			current.endSec = roundSec(segment.endSec * 1000);
+			current.text = `${current.text} ${segment.text.trim()}`.trim();
+			current.sourceSegmentCount += 1;
+		}
+	}
+	flush();
+
+	return phrases.map((phrase, index) => {
+		const next = phrases[index + 1];
+		const pauseAfterSec = next ? Math.max(0, next.startSec - phrase.endSec) : 0;
+		return {
+			...phrase,
+			...(pauseAfterSec >= 0.25 ? { pauseAfterSec: roundSec(pauseAfterSec * 1000) } : {}),
+		};
+	});
 }
 
 /**
@@ -1229,9 +1379,13 @@ export function executeAgentTool(
 
 	switch (name) {
 		case "getCurrentDocument": {
+			const parsed = getCurrentDocumentArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
 			return {
 				ok: true,
-				resultJson: JSON.stringify(documentSnapshotForModel(document, options?.cursorTelemetry)),
+				resultJson: JSON.stringify(
+					documentSnapshotForModel(document, options?.cursorTelemetry, parsed.data),
+				),
 			};
 		}
 
@@ -1301,30 +1455,53 @@ export function executeAgentTool(
 			if (!transcript) {
 				return failure(`No transcript for asset ${assetId ?? "(none)"}.`);
 			}
-			// ponytail: no cap. There used to be a `.slice(0, 800)` here, guarded by
-			// "words would blow the context" — written believing a segment was a
-			// phrase. On the production path a segment IS one word
-			// (src/lib/captioning/transcribe.ts: whisper's word timings are mapped
-			// one-to-one), so the cap cut the transcript at the 800th WORD — around
-			// five minutes of speech — and said nothing about it. The model read a
-			// fifth of a half-hour recording, cut the silences it could see, and
-			// reported the job done, because nothing in the payload told it otherwise.
-			//
-			// A whole 30-minute transcript is ~285k characters, ~70k tokens: large,
-			// and well inside every model this app talks to. If a recording ever does
-			// get near a window, the honest fix is to know the window — the app has no
-			// per-model context budget today — not to guess a number here and drop the
-			// rest in silence.
-			const segments = transcript.segments.map((s) => ({
+			const allSegments: ModelTranscriptSegment[] = transcript.segments.map((s) => ({
 				id: s.id,
 				kind: s.kind,
 				startSec: s.startSec,
 				endSec: s.endSec,
 				text: s.text,
 			}));
+			const rangeStart = Math.min(
+				parsed.data.startSec ?? 0,
+				parsed.data.endSec ?? Number.POSITIVE_INFINITY,
+			);
+			const rangeEnd = Math.max(
+				parsed.data.startSec ?? 0,
+				parsed.data.endSec ?? Number.POSITIVE_INFINITY,
+			);
+			const rangedSegments = allSegments.filter(
+				(segment) => segment.endSec > rangeStart && segment.startSec < rangeEnd,
+			);
+			const completeItems =
+				parsed.data.mode === "phrases"
+					? transcriptPhrases(rangedSegments)
+					: rangedSegments.map((segment) => ({ ...segment }));
+			const pageItems = completeItems.slice(
+				parsed.data.offset,
+				parsed.data.offset + parsed.data.limit,
+			);
+			const nextOffset = parsed.data.offset + pageItems.length;
 			return {
 				ok: true,
-				resultJson: JSON.stringify({ assetId, language: transcript.language, segments }),
+				resultJson: JSON.stringify({
+					assetId,
+					language: transcript.language,
+					mode: parsed.data.mode,
+					coverage: {
+						startSec: rangedSegments[0]?.startSec ?? null,
+						endSec: rangedSegments.at(-1)?.endSec ?? null,
+					},
+					sourceSegmentCount: rangedSegments.length,
+					page: {
+						offset: parsed.data.offset,
+						returned: pageItems.length,
+						total: completeItems.length,
+						complete: nextOffset >= completeItems.length,
+						...(nextOffset < completeItems.length ? { nextOffset } : {}),
+					},
+					segments: pageItems,
+				}),
 			};
 		}
 

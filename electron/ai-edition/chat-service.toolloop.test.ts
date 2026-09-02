@@ -12,14 +12,25 @@ import {
 } from "../../src/lib/ai-edition/schema";
 
 vi.mock("./deep-agent/service", () => ({
+	creatorEditRanges: vi.fn(() => []),
 	invokeOpenScreenAgent: vi.fn(),
+	invokeOpenScreenCreatorEditRange: vi.fn(),
+	isCreatorEditMessage: vi.fn(() => false),
 }));
 
 import { createSession, rewindToMessage, runChat } from "./chat-service";
-import { invokeOpenScreenAgent } from "./deep-agent/service";
+import {
+	creatorEditRanges,
+	invokeOpenScreenAgent,
+	invokeOpenScreenCreatorEditRange,
+	isCreatorEditMessage,
+} from "./deep-agent/service";
 import type { LlmConfigStore } from "./llm-config-store";
 
 const invokeMock = vi.mocked(invokeOpenScreenAgent);
+const creatorInvokeMock = vi.mocked(invokeOpenScreenCreatorEditRange);
+const creatorRangesMock = vi.mocked(creatorEditRanges);
+const isCreatorEditMessageMock = vi.mocked(isCreatorEditMessage);
 
 function fixtureDocument(): AxcutDocument {
 	const base = createEmptyDocument({ title: "Test", projectId: "proj_loop" });
@@ -96,6 +107,11 @@ let fixture: ToolLoopFixture = resetFixture();
 beforeEach(() => {
 	fixture = resetFixture();
 	invokeMock.mockReset();
+	creatorInvokeMock.mockReset();
+	creatorRangesMock.mockReset();
+	isCreatorEditMessageMock.mockReset();
+	creatorRangesMock.mockReturnValue([]);
+	isCreatorEditMessageMock.mockReturnValue(false);
 	// ponytail: default mock — tests override per-scenario.
 	invokeMock.mockImplementation(async (args) => {
 		fixture.captured.push({ args });
@@ -142,6 +158,48 @@ async function streamAgent(
 }
 
 describe("runChat tool loop", () => {
+	it("runs Creator Edit as bounded sections and carries edits forward", async () => {
+		isCreatorEditMessageMock.mockReturnValue(true);
+		creatorRangesMock.mockReturnValue([
+			{ startSec: 10, endSec: 20, index: 1, total: 2 },
+			{ startSec: 40, endSec: 50, index: 2, total: 2 },
+		]);
+		creatorInvokeMock
+			.mockImplementationOnce(async (args) => ({
+				text: "section one",
+				document: {
+					...args.document,
+					project: { ...args.document.project, title: "After section one" },
+				},
+				mutated: true,
+			}))
+			.mockImplementationOnce(async (args) => ({
+				text: "section two",
+				document: {
+					...args.document,
+					project: { ...args.document.project, title: "After section two" },
+				},
+				mutated: true,
+			}));
+
+		const session = createSession("proj_creator_sections");
+		const result = await runChat(
+			"proj_creator_sections",
+			session.id,
+			"OpenScreen Creator Edit mode.",
+			stubConfig(),
+			fixtureDocument(),
+		);
+
+		expect(result.success).toBe(true);
+		expect(invokeMock).not.toHaveBeenCalled();
+		expect(creatorInvokeMock).toHaveBeenCalledTimes(2);
+		const secondSectionDocument = creatorInvokeMock.mock.calls[1][0].document as AxcutDocument;
+		expect(secondSectionDocument.project.title).toBe("After section one");
+		expect((result.document as AxcutDocument | undefined)?.project.title).toBe("After section two");
+		expect(result.assistantMessage?.content).toContain("completed 2 sections");
+	});
+
 	it("runs a loopback OpenAI-compatible model without an API key", async () => {
 		const session = createSession("proj_local_no_key");
 		const localConfig = {

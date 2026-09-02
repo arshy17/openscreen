@@ -7,10 +7,13 @@ import {
 	Mic as MicOn,
 	MonitorSmartphone,
 	MousePointer2,
+	PanelTopClose,
+	RefreshCw,
+	ShieldCheck,
 	Volume2,
 	VolumeX,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AudioLevelMeter } from "@/components/ui/audio-level-meter";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioLevelMeter } from "@/hooks/useAudioLevelMeter";
@@ -27,6 +30,7 @@ interface RecordingPrefsState {
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
+	hideDesktopIcons: boolean;
 	cursorCaptureMode: "editable-overlay" | "system";
 }
 
@@ -37,6 +41,7 @@ const DEFAULT_PREFS: RecordingPrefsState = {
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,
+	hideDesktopIcons: false,
 	cursorCaptureMode: "editable-overlay",
 };
 
@@ -61,6 +66,7 @@ export function RecStage({
 	onClose?: () => void;
 }) {
 	const t = useScopedT("editor");
+	const isMac = window.electronAPI?.getPlatform?.() === "darwin";
 	const [prefs, setPrefsState] = useState<RecordingPrefsState>(DEFAULT_PREFS);
 	useEffect(() => {
 		let cancelled = false;
@@ -158,6 +164,7 @@ export function RecStage({
 	const visibleSources = sourceTab === "screen" ? screenSources : windowSources;
 
 	const cursorHighlight = prefs.cursorCaptureMode === "editable-overlay";
+	const [healthCheckedAt, setHealthCheckedAt] = useState<number | null>(null);
 	// Same answer as the HUD, from the same place. This stage used to decide for
 	// itself and always showed a picker, so the same build hid the choice on the
 	// HUD and demanded it here.
@@ -165,6 +172,83 @@ export function RecStage({
 	const sourceLabel = portalOwnsSource
 		? t("rec.systemPicker")
 		: (source?.name ?? t("rec.entireScreen"));
+	const selectedMicrophone =
+		micDevices.devices.find(
+			(device) => device.deviceId === (prefs.micDeviceId ?? micDevices.selectedDeviceId),
+		)?.label ?? prefs.micDeviceName;
+	const selectedCamera = camDevices.devices.find(
+		(device) => device.deviceId === (prefs.camDeviceId ?? camDevices.selectedDeviceId),
+	)?.label;
+	const healthChecks = useMemo(
+		() => [
+			{
+				label: "Capture source",
+				status: portalOwnsSource || source ? "ready" : "warning",
+				detail: portalOwnsSource
+					? "macOS will ask you to choose when recording starts"
+					: sourceLabel,
+			},
+			{
+				label: "Microphone",
+				status: !prefs.micEnabled
+					? "optional"
+					: micDevices.devices.length > 0
+						? "ready"
+						: "warning",
+				detail: !prefs.micEnabled
+					? "Off by choice"
+					: micDevices.devices.length > 0
+						? micLevel > 0.01
+							? `${selectedMicrophone ?? "Selected microphone"} — signal detected`
+							: `${selectedMicrophone ?? "Selected microphone"} — speak to confirm the meter moves`
+						: "No input device found",
+			},
+			{
+				label: "Camera",
+				status: !prefs.camEnabled
+					? "optional"
+					: cameraStream
+						? "ready"
+						: cameraError
+							? "warning"
+							: "checking",
+				detail: !prefs.camEnabled
+					? "Off by choice"
+					: cameraStream
+						? `${selectedCamera ?? "Selected camera"} — live preview is working`
+						: cameraError
+							? "Camera could not start"
+							: "Starting preview…",
+			},
+			{
+				label: "System audio",
+				status: prefs.systemAudioEnabled ? "ready" : "optional",
+				detail: prefs.systemAudioEnabled ? "Will be captured" : "Off by choice",
+			},
+			{
+				label: "Presenter windows",
+				status: isMac ? "ready" : "optional",
+				detail: isMac
+					? "HUD, Notes, and live self-view stay visible to you but are excluded from capture"
+					: "Platform capture protection is used where available",
+			},
+		],
+		[
+			cameraError,
+			cameraStream,
+			micDevices.devices.length,
+			micLevel,
+			portalOwnsSource,
+			prefs.camEnabled,
+			prefs.micEnabled,
+			prefs.systemAudioEnabled,
+			selectedCamera,
+			selectedMicrophone,
+			source,
+			sourceLabel,
+			isMac,
+		],
+	);
 
 	return (
 		<div className={styles.recStage}>
@@ -255,6 +339,26 @@ export function RecStage({
 							{prefs.systemAudioEnabled ? t("rec.on") : t("rec.off")}
 						</button>
 					</div>
+
+					{isMac && !source?.id.startsWith("window:") ? (
+						<div className={styles.recRow}>
+							<div className={styles.recRowLabel}>
+								<PanelTopClose size={15} />
+								<span>
+									{t("rec.hideDesktopIcons")}
+									<small className={styles.recRowHint}>{t("rec.hideDesktopIconsHint")}</small>
+								</span>
+							</div>
+							<button
+								type="button"
+								className={`${styles.recToggleBtn}${prefs.hideDesktopIcons ? ` ${styles.on}` : ""}`}
+								aria-pressed={prefs.hideDesktopIcons}
+								onClick={() => updatePrefs({ hideDesktopIcons: !prefs.hideDesktopIcons })}
+							>
+								{prefs.hideDesktopIcons ? t("rec.on") : t("rec.off")}
+							</button>
+						</div>
+					) : null}
 
 					<div className={styles.recRow}>
 						<div className={styles.recRowLabel}>
@@ -366,6 +470,36 @@ export function RecStage({
 						>
 							{cursorHighlight ? t("rec.on") : t("rec.off")}
 						</button>
+					</div>
+
+					<div className={styles.recHealth}>
+						<div className={styles.recHealthHead}>
+							<span>
+								<ShieldCheck size={15} /> Live recording preflight
+							</span>
+							<button type="button" onClick={() => setHealthCheckedAt(Date.now())}>
+								<RefreshCw size={13} />
+								Refresh
+							</button>
+						</div>
+						<div className={styles.recHealthList} aria-live="polite">
+							{healthChecks.map((check) => (
+								<div key={check.label} data-status={check.status}>
+									<i aria-hidden />
+									<span>
+										<strong>{check.label}</strong>
+										<small>{check.detail}</small>
+									</span>
+								</div>
+							))}
+						</div>
+						<p>
+							This check never starts recording or changes your choices
+							{healthCheckedAt
+								? ` · refreshed ${new Date(healthCheckedAt).toLocaleTimeString()}`
+								: ""}
+							.
+						</p>
 					</div>
 				</div>
 			</div>

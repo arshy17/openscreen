@@ -6,7 +6,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./deep-agent/service", () => ({
+	creatorEditRanges: vi.fn(() => []),
 	invokeOpenScreenAgent: vi.fn(),
+	invokeOpenScreenCreatorEditRange: vi.fn(),
+	isCreatorEditMessage: vi.fn(() => false),
 }));
 
 vi.mock("./deep-agent/chat-model", () => ({

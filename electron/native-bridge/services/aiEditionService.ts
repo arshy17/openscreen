@@ -13,7 +13,11 @@ import type {
 	AiEditionLlmConfig,
 	AiEditionLlmDisconnectResult,
 	AiEditionLlmSnapshot,
+	AiEditionPortableProjectResult,
+	AiEditionPrivacyNameClassificationResult,
+	AiEditionProjectSnapshotSummary,
 	AiEditionProjectSummary,
+	AiEditionSnapshotReason,
 } from "../../../src/native/contracts";
 import {
 	type CaptionTranslateSegment,
@@ -30,6 +34,7 @@ import {
 	listOpenRouterModels,
 	probeMiniMaxModels,
 } from "../../ai-edition/llm-provider-auth";
+import { classifyPrivacyNamesWithLocalModel } from "../../ai-edition/privacy-name-classifier";
 import { isLocalOpenAICompatible, PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
 
 export interface AiEditionServiceOptions {
@@ -162,6 +167,31 @@ export class AiEditionService {
 		return { assetId, document };
 	}
 
+	async listSnapshots(projectId: string): Promise<AiEditionProjectSnapshotSummary[]> {
+		return this.options.documents.listSnapshots(projectId);
+	}
+
+	async createSnapshot(
+		projectId: string,
+		label?: string,
+		reason?: AiEditionSnapshotReason,
+	): Promise<AiEditionProjectSnapshotSummary> {
+		return this.options.documents.createSnapshot(projectId, label, reason);
+	}
+
+	async restoreSnapshot(projectId: string, snapshotId: string): Promise<AiEditionDocumentResult> {
+		try {
+			const document = await this.options.documents.restoreSnapshot(projectId, snapshotId);
+			return { success: true, document };
+		} catch (error) {
+			return { success: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	async collectMedia(projectId: string): Promise<AiEditionPortableProjectResult> {
+		return this.options.documents.collectProjectMedia(projectId);
+	}
+
 	async llmGetSnapshot(): Promise<AiEditionLlmSnapshot> {
 		const config = this.llmConfig.getConfig();
 		const localNoAuth = isLocalOpenAICompatible(config?.provider, config?.baseUrl);
@@ -269,6 +299,41 @@ export class AiEditionService {
 			return { models: [], error: `Provider ${providerId} does not expose a dynamic model list` };
 		} catch (error) {
 			return { models: [], error: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	async classifyPrivacyNames(
+		candidates: Array<{ id: string; text: string }>,
+	): Promise<AiEditionPrivacyNameClassificationResult> {
+		const config = this.llmConfig.getConfig();
+		if (!config || !isLocalOpenAICompatible(config.provider, config.baseUrl)) {
+			return {
+				success: false,
+				nameCandidateIds: [],
+				error: "Configure a loopback OpenAI-compatible local model before classifying names.",
+			};
+		}
+		if (!config.baseUrl || !config.model) {
+			return {
+				success: false,
+				nameCandidateIds: [],
+				error: "The local model base URL and model name are required.",
+			};
+		}
+		try {
+			const result = await classifyPrivacyNamesWithLocalModel({
+				baseUrl: config.baseUrl,
+				model: config.model,
+				candidates,
+			});
+			return { success: true, model: config.model, ...result };
+		} catch (error) {
+			return {
+				success: false,
+				nameCandidateIds: [],
+				model: config.model,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	}
 

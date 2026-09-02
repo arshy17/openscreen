@@ -10,6 +10,8 @@
 // ponytail: Phase 1 surface area is intentionally narrow (list / get / create
 // / save / addAsset / removeAsset). ops/history/agent runtime land in Phase 6.
 
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
@@ -39,6 +41,31 @@ export interface AddAssetInput {
 	path: string;
 	label?: string;
 }
+
+export type ProjectSnapshotReason = "autosave" | "manual" | "ai" | "restore";
+
+export interface ProjectSnapshotSummary {
+	id: string;
+	projectId: string;
+	createdAt: string;
+	label: string;
+	reason: ProjectSnapshotReason;
+	sizeBytes: number;
+}
+
+interface ProjectSnapshotFile extends ProjectSnapshotSummary {
+	version: 1;
+	document: AxcutDocument;
+}
+
+export interface PortableProjectResult {
+	path: string;
+	mediaCount: number;
+	manifestPath: string;
+}
+
+const AUTOSAVE_SNAPSHOT_INTERVAL_MS = 60_000;
+const MAX_AUTOSAVE_SNAPSHOTS = 40;
 
 export class DocumentNotFoundError extends Error {
 	constructor(public readonly projectId: string) {
@@ -117,16 +144,21 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
 export class DocumentService {
 	private readonly projectsRoot: string;
 	private readonly mediaRegistryDir: string;
+	private readonly portableProjectsRoot: string;
 	private legacyMigrationDone = false;
 	/** Tail of the in-flight save chain per project id — see writeProject. */
 	private readonly writeQueues = new Map<string, Promise<void>>();
+	/** Avoid re-reading and validating up to 40 large snapshots on every keystroke-save. */
+	private readonly lastAutosaveAt = new Map<string, number>();
 
 	// `mediaRegistryDir` is where the media-links registry file lives
 	// (RECORDINGS_DIR in production) — see getProject. Injected for the same
 	// reason as `projectsRoot`: this module stays free of any `electron` import.
-	constructor(projectsRoot: string, mediaRegistryDir: string) {
+	constructor(projectsRoot: string, mediaRegistryDir: string, portableProjectsRoot?: string) {
 		this.projectsRoot = projectsRoot;
 		this.mediaRegistryDir = mediaRegistryDir;
+		this.portableProjectsRoot =
+			portableProjectsRoot ?? path.join(projectsRoot, "Portable Projects");
 	}
 
 	async ensureProjectsDir(): Promise<void> {
@@ -177,6 +209,14 @@ export class DocumentService {
 	private legacyFileFor(projectId: string): string {
 		const safe = safeProjectId(projectId);
 		return path.join(this.projectsRoot, `${safe}${LEGACY_PROJECT_FILE_EXTENSION}`);
+	}
+
+	private snapshotsDirFor(projectId: string): string {
+		return path.join(this.projectsRoot, ".recovery", safeProjectId(projectId));
+	}
+
+	private snapshotFileFor(projectId: string, snapshotId: string): string {
+		return path.join(this.snapshotsDirFor(projectId), `${safeProjectId(snapshotId)}.json`);
 	}
 
 	async listProjects(): Promise<ProjectSummary[]> {
@@ -240,8 +280,33 @@ export class DocumentService {
 		// the upgraded JSON so `documentSchema.parse` still validates what we hand
 		// back, and it is not persisted from here: the renderer saves the document
 		// it was given, as it does for any other load-time repair.
-		const migrated = migrateRawDocumentToCurrent(JSON.parse(raw));
-		return documentSchema.parse(await relinkProjectMedia(migrated, this.mediaRegistryDir));
+		try {
+			const migrated = migrateRawDocumentToCurrent(JSON.parse(raw));
+			return documentSchema.parse(await relinkProjectMedia(migrated, this.mediaRegistryDir));
+		} catch (error) {
+			// A torn/manual-corrupted canonical file must not strand every valid version
+			// behind it. Return the newest validated recovery point without overwriting
+			// the damaged file; the Recovery UI lets the user explicitly restore it.
+			const snapshots = await this.listSnapshots(projectId);
+			for (const snapshot of snapshots) {
+				try {
+					const recovered = await this.readSnapshot(projectId, snapshot.id);
+					console.warn(
+						`[ai-edition] project ${projectId} is unreadable; opened recovery point ${snapshot.id}`,
+						error,
+					);
+					return documentSchema.parse(
+						await relinkProjectMedia(recovered.document, this.mediaRegistryDir),
+					);
+				} catch (snapshotError) {
+					console.warn(`[ai-edition] invalid recovery point ${snapshot.id}:`, snapshotError);
+				}
+			}
+			throw new ProjectFileError(
+				`Project ${projectId} is damaged and no valid recovery point is available.`,
+				projectId,
+			);
+		}
 	}
 
 	async createProject(title: string): Promise<AxcutDocument> {
@@ -275,6 +340,153 @@ export class DocumentService {
 					throw error;
 				}
 			}
+		}
+		await fs.rm(this.snapshotsDirFor(projectId), { recursive: true, force: true });
+		this.lastAutosaveAt.delete(projectId);
+	}
+
+	async createSnapshot(
+		projectId: string,
+		label = "Manual restore point",
+		reason: ProjectSnapshotReason = "manual",
+	): Promise<ProjectSnapshotSummary> {
+		const document = await this.getProject(projectId);
+		return this.writeSnapshot(document, label, reason);
+	}
+
+	async listSnapshots(projectId: string): Promise<ProjectSnapshotSummary[]> {
+		const directory = this.snapshotsDirFor(projectId);
+		let entries: string[];
+		try {
+			entries = await fs.readdir(directory);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+			throw error;
+		}
+		const summaries: ProjectSnapshotSummary[] = [];
+		for (const entry of entries.filter((name) => name.endsWith(".json"))) {
+			try {
+				const parsed = JSON.parse(await fs.readFile(path.join(directory, entry), "utf8")) as
+					| ProjectSnapshotFile
+					| undefined;
+				if (!parsed || parsed.version !== 1 || parsed.projectId !== projectId) continue;
+				documentSchema.parse(parsed.document);
+				summaries.push({
+					id: parsed.id,
+					projectId: parsed.projectId,
+					createdAt: parsed.createdAt,
+					label: parsed.label,
+					reason: parsed.reason,
+					sizeBytes: parsed.sizeBytes,
+				});
+			} catch (error) {
+				console.warn(`[ai-edition] ignored invalid recovery point ${entry}:`, error);
+			}
+		}
+		return summaries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	}
+
+	async restoreSnapshot(projectId: string, snapshotId: string): Promise<AxcutDocument> {
+		const snapshot = await this.readSnapshot(projectId, snapshotId);
+		// Restoring is itself reversible: preserve what the user is leaving before
+		// replacing the canonical project.
+		try {
+			await this.createSnapshot(projectId, "Before recovery restore", "restore");
+		} catch (error) {
+			console.warn("[ai-edition] could not create pre-restore snapshot:", error);
+		}
+		const restored: AxcutDocument = {
+			...snapshot.document,
+			project: { ...snapshot.document.project, updatedAt: new Date().toISOString() },
+		};
+		await this.writeProject(restored, false);
+		return restored;
+	}
+
+	async collectProjectMedia(projectId: string): Promise<PortableProjectResult> {
+		const document = await this.getProject(projectId);
+		await fs.mkdir(this.portableProjectsRoot, { recursive: true });
+		const title = sanitizeFileName(document.project.title) || "OpenScreen Project";
+		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+		const finalPath = path.join(this.portableProjectsRoot, `${title} ${stamp}`);
+		const temporaryPath = `${finalPath}.tmp-${process.pid}-${createId("bundle")}`;
+		const mediaDir = path.join(temporaryPath, "Media");
+		await fs.mkdir(mediaDir, { recursive: true });
+
+		const copied = new Map<string, string>();
+		const manifestMedia: Array<{
+			sourceName: string;
+			bundledPath: string;
+			sha256: string;
+			sizeBytes: number;
+		}> = [];
+		const copyMedia = async (sourcePath: string): Promise<string> => {
+			const absolute = path.resolve(sourcePath);
+			const existing = copied.get(absolute);
+			if (existing) return existing;
+			const stats = await fs.stat(absolute);
+			if (!stats.isFile())
+				throw new ProjectFileError(`Media is not a file: ${path.basename(absolute)}`, projectId);
+			const base = sanitizeFileName(path.basename(absolute)) || "media";
+			let bundledName = base;
+			let suffix = 2;
+			while ([...copied.values()].some((value) => path.basename(value) === bundledName)) {
+				const ext = path.extname(base);
+				bundledName = `${path.basename(base, ext)}-${suffix++}${ext}`;
+			}
+			const target = path.join(mediaDir, bundledName);
+			await fs.copyFile(absolute, target);
+			const copiedStats = await fs.stat(target);
+			manifestMedia.push({
+				sourceName: path.basename(absolute),
+				bundledPath: path.join("Media", bundledName),
+				sha256: await hashFile(target),
+				sizeBytes: copiedStats.size,
+			});
+			copied.set(absolute, target);
+			return target;
+		};
+
+		try {
+			const assets: AxcutAsset[] = [];
+			for (const asset of document.assets) {
+				const originalPath = await copyMedia(asset.originalPath);
+				const cameraTrack = asset.cameraTrack?.sourcePath
+					? { ...asset.cameraTrack, sourcePath: await copyMedia(asset.cameraTrack.sourcePath) }
+					: asset.cameraTrack;
+				assets.push({ ...asset, originalPath, cameraTrack });
+			}
+			const legacy = (document.legacyEditor as Record<string, unknown> | null) ?? {};
+			const backgroundMusicPath =
+				typeof legacy.backgroundMusicPath === "string" && legacy.backgroundMusicPath.trim()
+					? await copyMedia(legacy.backgroundMusicPath)
+					: null;
+			const portable: AxcutDocument = {
+				...document,
+				assets,
+				legacyEditor: { ...legacy, ...(backgroundMusicPath ? { backgroundMusicPath } : {}) },
+			};
+			const projectPath = path.join(temporaryPath, "project.openscreen");
+			await fs.writeFile(projectPath, JSON.stringify(portable, null, 2), "utf8");
+			const manifestPath = path.join(temporaryPath, "manifest.json");
+			await fs.writeFile(
+				manifestPath,
+				JSON.stringify(
+					{ version: 1, projectId, createdAt: new Date().toISOString(), media: manifestMedia },
+					null,
+					2,
+				),
+				"utf8",
+			);
+			await renameWithRetry(temporaryPath, finalPath);
+			return {
+				path: finalPath,
+				mediaCount: manifestMedia.length,
+				manifestPath: path.join(finalPath, "manifest.json"),
+			};
+		} catch (error) {
+			await fs.rm(temporaryPath, { recursive: true, force: true });
+			throw error;
 		}
 	}
 
@@ -366,13 +578,13 @@ export class DocumentService {
 	 * The queue alone would still leave a torn file on a crash; the rename alone
 	 * would still let two saves race for the same destination.
 	 */
-	private writeProject(doc: AxcutDocument): Promise<void> {
+	private writeProject(doc: AxcutDocument, snapshotPrevious = true): Promise<void> {
 		const projectId = doc.project.id;
 		const tail = this.writeQueues.get(projectId) ?? Promise.resolve();
 		// Chained on both settlements: one save failing must not cancel the next.
 		const run = tail.then(
-			() => this.writeProjectNow(doc),
-			() => this.writeProjectNow(doc),
+			() => this.writeProjectNow(doc, snapshotPrevious),
+			() => this.writeProjectNow(doc, snapshotPrevious),
 		);
 		const settled = run.catch(() => undefined);
 		this.writeQueues.set(projectId, settled);
@@ -383,7 +595,7 @@ export class DocumentService {
 		return run;
 	}
 
-	private async writeProjectNow(doc: AxcutDocument): Promise<void> {
+	private async writeProjectNow(doc: AxcutDocument, snapshotPrevious: boolean): Promise<void> {
 		await this.ensureProjectsDir();
 		const filePath = this.fileFor(doc.project.id);
 		// The suffix goes AFTER the extension on purpose: listProjects matches on a
@@ -392,6 +604,7 @@ export class DocumentService {
 		// queues (or two processes) never share a temp path.
 		const tempPath = `${filePath}.tmp-${process.pid}-${createId("w")}`;
 		const json = JSON.stringify(doc, null, 2);
+		if (snapshotPrevious) await this.maybeSnapshotPrevious(doc.project.id, json);
 
 		let handle: FileHandle | undefined;
 		try {
@@ -424,4 +637,93 @@ export class DocumentService {
 		// usually renamed it already; this is a belt-and-braces cleanup).
 		await fs.unlink(this.legacyFileFor(doc.project.id)).catch(() => undefined);
 	}
+
+	private async maybeSnapshotPrevious(projectId: string, nextJson: string): Promise<void> {
+		let raw: string;
+		try {
+			raw = await fs.readFile(this.fileFor(projectId), "utf8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
+			throw error;
+		}
+		if (raw === nextJson) return;
+		const previous = parseLoadedDocument(raw);
+		let lastAutosaveAt = this.lastAutosaveAt.get(projectId);
+		if (lastAutosaveAt == null) {
+			const existing = await this.listSnapshots(projectId);
+			const newestAutosave = existing.find((item) => item.reason === "autosave");
+			lastAutosaveAt = newestAutosave ? Date.parse(newestAutosave.createdAt) : 0;
+			this.lastAutosaveAt.set(projectId, lastAutosaveAt);
+		}
+		if (Date.now() - lastAutosaveAt < AUTOSAVE_SNAPSHOT_INTERVAL_MS) return;
+		await this.writeSnapshot(previous, "Automatic recovery point", "autosave");
+		this.lastAutosaveAt.set(projectId, Date.now());
+		await this.pruneAutosaveSnapshots(projectId);
+	}
+
+	private async writeSnapshot(
+		document: AxcutDocument,
+		label: string,
+		reason: ProjectSnapshotReason,
+	): Promise<ProjectSnapshotSummary> {
+		const parsed = documentSchema.parse(document);
+		const id = createId("snapshot");
+		const createdAt = new Date().toISOString();
+		const base = {
+			version: 1 as const,
+			id,
+			projectId: parsed.project.id,
+			createdAt,
+			label: label.trim().slice(0, 120) || "Restore point",
+			reason,
+			document: parsed,
+		};
+		let encoded = JSON.stringify({ ...base, sizeBytes: 0 }, null, 2);
+		const sizeBytes = Buffer.byteLength(encoded);
+		encoded = JSON.stringify({ ...base, sizeBytes }, null, 2);
+		const directory = this.snapshotsDirFor(parsed.project.id);
+		await fs.mkdir(directory, { recursive: true });
+		const filePath = this.snapshotFileFor(parsed.project.id, id);
+		const tempPath = `${filePath}.tmp-${process.pid}-${createId("w")}`;
+		await fs.writeFile(tempPath, encoded, "utf8");
+		await renameWithRetry(tempPath, filePath);
+		return { id, projectId: parsed.project.id, createdAt, label: base.label, reason, sizeBytes };
+	}
+
+	private async readSnapshot(projectId: string, snapshotId: string): Promise<ProjectSnapshotFile> {
+		const parsed = JSON.parse(
+			await fs.readFile(this.snapshotFileFor(projectId, snapshotId), "utf8"),
+		) as ProjectSnapshotFile;
+		if (parsed.version !== 1 || parsed.projectId !== projectId || parsed.id !== snapshotId) {
+			throw new ProjectFileError("Recovery point does not belong to this project.", projectId);
+		}
+		return { ...parsed, document: documentSchema.parse(parsed.document) };
+	}
+
+	private async pruneAutosaveSnapshots(projectId: string): Promise<void> {
+		const autosaves = (await this.listSnapshots(projectId)).filter(
+			(item) => item.reason === "autosave",
+		);
+		await Promise.all(
+			autosaves
+				.slice(MAX_AUTOSAVE_SNAPSHOTS)
+				.map((item) => fs.unlink(this.snapshotFileFor(projectId, item.id)).catch(() => undefined)),
+		);
+	}
+}
+
+function sanitizeFileName(value: string): string {
+	return Array.from(value, (character) =>
+		character.charCodeAt(0) < 32 || '\\/:*?"<>|'.includes(character) ? "-" : character,
+	)
+		.join("")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 96);
+}
+
+async function hashFile(filePath: string): Promise<string> {
+	const digest = createHash("sha256");
+	for await (const chunk of createReadStream(filePath)) digest.update(chunk as Buffer);
+	return digest.digest("hex");
 }
