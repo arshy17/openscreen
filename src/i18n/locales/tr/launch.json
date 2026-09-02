@@ -9,6 +9,8 @@
 		"useVerticalTray": "Dikey araç çubuğunu kullan",
 		"useHorizontalTray": "Yatay araç çubuğunu kullan",
 		"openStudio": "Stüdyoyu aç",
+		"hideDesktopIcons": "Kayıtta masaüstü simgelerini gizle",
+		"showDesktopIcons": "Kayıtta masaüstü simgelerini göster",
 		"openNotes": "Notları aç",
 		"openNotesPlaceholder": "Notlarınızı buraya yazın...",
 		"notesToolbar": {

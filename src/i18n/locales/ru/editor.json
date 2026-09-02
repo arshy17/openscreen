@@ -102,6 +102,8 @@
 		"source": "Источник",
 		"systemPicker": "Система спросит, чем поделиться",
 		"systemAudio": "Системный звук",
+		"hideDesktopIcons": "Скрыть значки рабочего стола",
+		"hideDesktopIconsHint": "Скрываются только в записи",
 		"microphone": "Микрофон",
 		"camera": "Камера",
 		"cursorHighlight": "Подсветка курсора",

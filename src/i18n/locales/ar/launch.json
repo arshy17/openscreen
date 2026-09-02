@@ -9,6 +9,8 @@
 		"useVerticalTray": "استخدام الشريط العمودي",
 		"useHorizontalTray": "استخدام الشريط الأفقي",
 		"openStudio": "فتح الاستوديو",
+		"hideDesktopIcons": "إخفاء أيقونات سطح المكتب في التسجيل",
+		"showDesktopIcons": "إظهار أيقونات سطح المكتب في التسجيل",
 		"openNotes": "فتح الملاحظات",
 		"openNotesPlaceholder": "اكتب ملاحظاتك هنا...",
 		"notesToolbar": {

@@ -267,6 +267,34 @@ describe("checkMacOsVersionFloor", () => {
 	});
 });
 
+describe("macOS local floor override", () => {
+	it("uses the pinned floor when OPENSCREEN_MACOS_FLOOR is unset", () => {
+		withEnv({ OPENSCREEN_MACOS_FLOOR: undefined, CI: undefined }, (t) => {
+			expect(t.resolveMacOsFloor()).toEqual({ floor: t.MAC_MIN_OS_FLOOR, pinned: true });
+		});
+	});
+
+	it("refuses unknown local-floor values", () => {
+		withEnv({ OPENSCREEN_MACOS_FLOOR: "latest", CI: undefined }, (t) => {
+			expect(() => t.resolveMacOsFloor()).toThrow(/not supported/);
+		});
+	});
+
+	it("refuses a host override in CI", () => {
+		withEnv({ OPENSCREEN_MACOS_FLOOR: "host", CI: "true" }, (t) => {
+			expect(() => t.resolveMacOsFloor()).toThrow(/refused under CI/);
+		});
+	});
+
+	it.runIf(process.platform === "darwin")("uses this Mac's version for local builds", () => {
+		withEnv({ OPENSCREEN_MACOS_FLOOR: "host", CI: undefined }, (t) => {
+			const result = t.resolveMacOsFloor();
+			expect(result.pinned).toBe(false);
+			expect(result.floor).toMatch(/^\d+(?:\.\d+){1,2}$/);
+		});
+	});
+});
+
 describe("MAC_MIN_OS_FLOOR", () => {
 	it("matches the floor the .app declares to LaunchServices", () => {
 		// Shared parser rather than a regex of its own: electron-builder.json5 is heavily

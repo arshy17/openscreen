@@ -16,7 +16,9 @@
 		"pressTrim": "Nhấn T để thêm cắt",
 		"pressAnnotation": "Nhấn A để thêm chú thích",
 		"pressSpeed": "Nhấn S để thêm tốc độ",
-		"pressCameraFullscreen": "Nhấn C để thêm một đoạn Camera Toàn màn hình"
+		"pressCameraFullscreen": "Nhấn C để thêm một đoạn Camera Toàn màn hình",
+		"denseRegions": "{{count}} chỉnh sửa — phóng to để chỉnh sửa",
+		"denseRegionsHint": "Phóng to dòng thời gian để chỉnh sửa từng vùng."
 	},
 	"labels": {
 		"pan": "Xoay",

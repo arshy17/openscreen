@@ -274,6 +274,8 @@
 		"clipLabel": "Clipe {{index}}",
 		"noClipTranscript": "Sem transcrição para este clipe — abra o cartão do recurso e gere novamente.",
 		"editorAria": "Transcrição de {{filename}}",
+		"editHint": "Clique duas vezes em uma palavra para corrigi-la. Backspace ou Delete corta palavras do vídeo.",
+		"editWord": "Corrigir “{{word}}”",
 		"silence": "[silêncio {{duration}} s]",
 		"restoreSilence": "Restaurar silêncio ({{duration}} s)",
 		"trimSilence": "Cortar silêncio ({{duration}} s)",
@@ -283,6 +285,7 @@
 	"captions": {
 		"show": "Mostrar legendas",
 		"noTranscript": "As legendas são lidas da transcrição da mídia. Transcreva este vídeo para ativá-las.",
+		"noSpeechDetected": "Nenhuma fala foi detectada nesta gravação. As legendas precisam de áudio audível do microfone ou do sistema.",
 		"transcribe": "Transcrever vídeo",
 		"transcribing": "Transcrevendo…",
 		"derivedFromTranscript": "{{count}} linhas de legenda, derivadas ao vivo da transcrição.",
@@ -327,6 +330,19 @@
 		"title": "Áudio",
 		"outputGain": "Nível de saída",
 		"reset": "Redefinir áudio",
-		"help": "Ajuste o nível de saída do áudio. Ele se aplica da mesma forma na prévia e na exportação."
+		"help": "Ajuste o nível de saída do áudio. Ele se aplica da mesma forma na prévia e na exportação.",
+		"backgroundMusic": "Música de fundo",
+		"music": "Música",
+		"noMusic": "Nenhuma música adicionada",
+		"addMusic": "Adicionar música",
+		"replaceMusic": "Substituir música",
+		"removeMusic": "Remover música",
+		"musicLevel": "Nível da música",
+		"loopMusic": "Repetir para preencher o vídeo",
+		"fadeIn": "Fade in",
+		"fadeOut": "Fade out",
+		"musicAdded": "Música de fundo adicionada",
+		"couldNotAddMusic": "Não foi possível adicionar a música de fundo",
+		"couldNotReadMusic": "Não foi possível ler este arquivo de áudio."
 	}
 }

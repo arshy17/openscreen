@@ -16,7 +16,9 @@
 		"pressTrim": "Pressione T para adicionar recorte",
 		"pressAnnotation": "Pressione A para adicionar anotação",
 		"pressSpeed": "Pressione S para adicionar velocidade",
-		"pressCameraFullscreen": "Pressione C para adicionar um segmento de Câmera em Tela Cheia"
+		"pressCameraFullscreen": "Pressione C para adicionar um segmento de Câmera em Tela Cheia",
+		"denseRegions": "{{count}} edições — amplie para editar",
+		"denseRegionsHint": "Amplie a linha do tempo para editar regiões individuais."
 	},
 	"labels": {
 		"pan": "Mover",

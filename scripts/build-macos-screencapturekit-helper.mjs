@@ -15,11 +15,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const helperName = "openscreen-screencapturekit-helper";
 const cursorHelperName = "openscreen-macos-cursor-helper";
+const privacyHelperName = "openscreen-privacy-vision-helper";
 const packageDir = path.join(root, "electron", "native", "screencapturekit");
 const buildDir = path.join(packageDir, "build");
 const swiftBuildDir = path.join(buildDir, "swiftpm");
 const localHelperPath = path.join(buildDir, helperName);
 const localCursorHelperPath = path.join(buildDir, cursorHelperName);
+const localPrivacyHelperPath = path.join(buildDir, privacyHelperName);
 
 // Build a separate single-arch binary per requested arch and place each in its own
 // electron/native/bin/darwin-<arch> folder (the runtime resolves that folder by the running app's
@@ -44,20 +46,30 @@ const xcodebuildVersion = spawnSync("xcodebuild", ["-version"], {
 
 if (xcodebuildVersion.status !== 0) {
 	const message = `${xcodebuildVersion.stderr ?? ""}${xcodebuildVersion.stdout ?? ""}`.trim();
-	console.error(
-		[
-			"Unable to build the macOS ScreenCaptureKit helper because full Xcode is not active.",
-			"",
-			message,
-			"",
-			"Install Xcode from the App Store or Apple Developer downloads, then run:",
-			"  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer",
-			"  sudo xcodebuild -license accept",
-			"",
-			"Command Line Tools alone may not include the Swift SDK/platform metadata required by SwiftPM.",
-		].join("\n"),
+	const swiftVersion = spawnSync("swift", ["--version"], {
+		cwd: root,
+		encoding: "utf8",
+	});
+	if (swiftVersion.status !== 0) {
+		console.error(
+			[
+				"Unable to build the macOS ScreenCaptureKit helper: neither full Xcode nor a working Swift toolchain is active.",
+				"",
+				message,
+				"",
+				"Install Xcode from the App Store or Apple Developer downloads, then run:",
+				"  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer",
+				"  sudo xcodebuild -license accept",
+			].join("\n"),
+		);
+		process.exit(1);
+	}
+	// Recent Command Line Tools releases include both SwiftPM and a complete macOS SDK. Let the
+	// real `swift build` below decide capability instead of rejecting that valid setup merely
+	// because `xcodebuild` itself insists on the full Xcode bundle.
+	console.warn(
+		`Full Xcode is not active; continuing with the available Swift toolchain.\n${message}`,
 	);
-	process.exit(1);
 }
 
 // SwiftPM writes a single-arch release build to <buildPath>/<swiftArch>-apple-macosx/release/<name>.
@@ -125,6 +137,7 @@ for (const { swift, tag } of archs) {
 	for (const [name, localPath] of [
 		[helperName, localHelperPath],
 		[cursorHelperName, localCursorHelperPath],
+		[privacyHelperName, localPrivacyHelperPath],
 	]) {
 		const exe = findExecutable(archBuildDir, swift, name);
 		if (!exe) {

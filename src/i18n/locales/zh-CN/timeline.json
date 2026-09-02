@@ -16,7 +16,9 @@
 		"pressTrim": "按 T 添加剪辑",
 		"pressAnnotation": "按 A 添加标注",
 		"pressSpeed": "按 S 添加速度",
-		"pressCameraFullscreen": "按 C 添加一个全屏摄像头片段"
+		"pressCameraFullscreen": "按 C 添加一个全屏摄像头片段",
+		"denseRegions": "{{count}} 项编辑 — 放大后编辑",
+		"denseRegionsHint": "放大时间线以编辑单个区域。"
 	},
 	"labels": {
 		"pan": "平移",

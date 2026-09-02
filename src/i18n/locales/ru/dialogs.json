@@ -79,6 +79,8 @@
 		"saveGif": "Сохранить экспортированный GIF",
 		"saveVideo": "Сохранить экспортированное видео",
 		"selectVideo": "Выбрать видеофайл",
+		"selectAudio": "Выбрать фоновую музыку",
+		"audioFiles": "Аудиофайлы",
 		"saveProject": "Сохранить проект OpenScreen",
 		"openProject": "Открыть проект OpenScreen",
 		"gifImage": "GIF изображение",

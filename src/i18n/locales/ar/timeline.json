@@ -16,7 +16,9 @@
 		"pressTrim": "اضغط T لإضافة قص",
 		"pressAnnotation": "اضغط A لإضافة شرح",
 		"pressSpeed": "اضغط S لإضافة سرعة",
-		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة"
+		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة",
+		"denseRegions": "{{count}} تعديلات — كبّر للتحرير",
+		"denseRegionsHint": "كبّر المخطط الزمني لتحرير المناطق الفردية."
 	},
 	"labels": {
 		"pan": "تحريك",

@@ -274,6 +274,8 @@
 		"clipLabel": "Clip {{index}}",
 		"noClipTranscript": "Nessuna trascrizione per questo clip: apri la scheda della risorsa e rigenerala.",
 		"editorAria": "Trascrizione di {{filename}}",
+		"editHint": "Fai doppio clic su una parola per correggerla. Backspace o Canc taglia le parole dal video.",
+		"editWord": "Correggi «{{word}}»",
 		"silence": "[silenzio {{duration}} s]",
 		"restoreSilence": "Ripristina silenzio ({{duration}} s)",
 		"trimSilence": "Taglia silenzio ({{duration}} s)",
@@ -283,6 +285,7 @@
 	"captions": {
 		"show": "Mostra sottotitoli",
 		"noTranscript": "I sottotitoli vengono letti dalla trascrizione del media. Trascrivi questo video per attivarli.",
+		"noSpeechDetected": "Non sono state rilevate parole pronunciate in questa registrazione. I sottotitoli richiedono audio udibile dal microfono o dal sistema.",
 		"transcribe": "Trascrivi video",
 		"transcribing": "Trascrizione…",
 		"derivedFromTranscript": "{{count}} righe di sottotitoli, derivate dal vivo dalla trascrizione.",
@@ -327,6 +330,19 @@
 		"title": "Audio",
 		"outputGain": "Livello di uscita",
 		"reset": "Reimposta audio",
-		"help": "Regola il livello di uscita audio. Si applica allo stesso modo nell’anteprima e nell’esportazione."
+		"help": "Regola il livello di uscita audio. Si applica allo stesso modo nell’anteprima e nell’esportazione.",
+		"backgroundMusic": "Musica di sottofondo",
+		"music": "Musica",
+		"noMusic": "Nessuna musica aggiunta",
+		"addMusic": "Aggiungi musica",
+		"replaceMusic": "Sostituisci musica",
+		"removeMusic": "Rimuovi musica",
+		"musicLevel": "Livello musica",
+		"loopMusic": "Ripeti per riempire il video",
+		"fadeIn": "Dissolvenza in entrata",
+		"fadeOut": "Dissolvenza in uscita",
+		"musicAdded": "Musica di sottofondo aggiunta",
+		"couldNotAddMusic": "Impossibile aggiungere la musica di sottofondo",
+		"couldNotReadMusic": "Impossibile leggere questo file audio."
 	}
 }

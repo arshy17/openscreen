@@ -16,7 +16,9 @@
 		"pressTrim": "Press T to add trim",
 		"pressAnnotation": "Press A to add annotation",
 		"pressSpeed": "Press S to add speed",
-		"pressCameraFullscreen": "Press C to add a Full Camera segment"
+		"pressCameraFullscreen": "Press C to add a Full Camera segment",
+		"denseRegions": "{{count}} edits — zoom in to edit",
+		"denseRegionsHint": "Zoom into the timeline to edit individual regions."
 	},
 	"labels": {
 		"pan": "Pan",

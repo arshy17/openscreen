@@ -9,6 +9,8 @@
 		"useVerticalTray": "使用直向托盤",
 		"useHorizontalTray": "使用橫向托盤",
 		"openStudio": "開啟工作室",
+		"hideDesktopIcons": "在錄影中隱藏桌面圖示",
+		"showDesktopIcons": "在錄影中顯示桌面圖示",
 		"openNotes": "開啟筆記",
 		"openNotesPlaceholder": "在此輸入筆記...",
 		"notesToolbar": {

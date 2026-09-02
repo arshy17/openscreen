@@ -9,11 +9,12 @@ OpenScreen builds its renderer, Electron main process, preload bridge, native he
 | `npm run dev` | Starts Vite with the Electron plugin; builds and launches main/preload unless `NO_ELECTRON` is set. |
 | `npm run build-vite` | Runs TypeScript checking and Vite only. It produces `dist/` and `dist-electron/` but no installer. |
 | `npm run build` | Runs TypeScript checking, Vite, then unrestricted `electron-builder`. This is the full generic packaging command, but it does not proactively build platform helpers. **On Windows, prefer `build:win`** — see [Stale native artifacts](#stale-native-artifacts). |
-| `npm run build:mac` | Builds the ScreenCaptureKit and cursor helpers, checks TypeScript, runs Vite, and packages the macOS target. |
+| `npm run build:mac` | Builds the ScreenCaptureKit and cursor helpers, checks TypeScript, runs Vite, and packages a signed `.app` for the current Mac architecture. Release CI turns that app into the per-architecture DMG and update ZIP. |
 | `npm run build:win` | Builds WGC/cursor helpers and the D3D11 compositor addon, fetches FFmpeg, checks TypeScript, runs Vite, and packages the Windows NSIS target without npm rebuild. |
 | `npm run build:win:store` | Performs the Windows native and renderer build, then asks electron-builder for the configured AppX Store package. |
 | `npm run build:linux` | Checks TypeScript, runs Vite, then packages AppImage, Debian, pacman, and RPM artifacts without npm rebuild. Its explicit `--linux` target list overrides `linux.target` in `electron-builder.json5`, so a target added to the config alone is never built. |
 | `npm run build:native:mac` | Uses SwiftPM to build requested single-architecture ScreenCaptureKit and macOS cursor helpers and stages them under `electron/native/bin/darwin-*`. |
+| `npm run install:custom:mac-beta` | Clean-builds, manifests, locally signs, backs up, atomically installs, verifies, and reopens the private `1.10.1-beta.1` app as `/Applications/Open Screen.app`. It requires the exact pinned Node/npm toolchain and never publishes an update. |
 | `npm run build:native:win` | Uses CMake/Ninja in an MSVC environment to build WGC capture and cursor-sampler executables and stage x64 binaries. |
 | `npm run build:native:compositor` | Uses Cargo/MSVC and the pinned shared FFmpeg SDK to build `compositor_view.node`. |
 | `npm run build:whisper-binaries` | Runs the whisper.cpp CMake build and stages the speech-to-text executable plus ggml backend sidecars for the host. |
@@ -258,6 +259,20 @@ Electron-builder produces AppImage, `.deb`, `.pacman`, and `.rpm` targets. Each 
 
 ## Node and toolchain versions
 
-`package.json#engines` and `.nvmrc` both pin Node.js `22.22.1`. The package manifest pins npm `10.9.4` through both `packageManager` and `engines.npm`. The Nix shell supplies Node 22, while the shared GitHub Actions setup currently requests the Node 22 release line rather than the exact patch.
+`package.json#engines` and `.nvmrc` both pin Node.js `22.22.1`. The package manifest pins npm `10.9.4` through both `packageManager` and `engines.npm`. The Nix shell supplies Node 22, while the shared GitHub Actions setup reads the exact patch from `.nvmrc`.
+
+The shared GitHub Actions setup reads `.nvmrc`, so CI and the private-beta installer now reject toolchain drift instead of accepting another Node 22 patch. The custom installer also sets the native payload floor to the current host and writes that Mac's version into the private app's minimum-system declaration. This exception is deliberately local-only; public builds retain the repository's macOS 13 floor.
+
+## Private macOS beta channel
+
+The custom beta retains `com.arshy17.openscreen.preview` so the current Mac keeps one stable TCC identity. Its visible name and install location are always `Open Screen` and `/Applications/Open Screen.app`. A `custom-local` package marker disables the upstream updater, and `app-update.yml` is removed before the final signature is created.
+
+Run the installer only from a reviewed clean commit using Node.js `22.22.1` and npm `10.9.4`:
+
+```sh
+npm run install:custom:mac-beta
+```
+
+The command rebuilds all macOS helpers and native payloads, performs the renderer build and directory package, validates the exact app identity, writes a schema-v2 provenance manifest, verifies the manifest plus every packaged native hash, and performs strict deep code-sign verification. It copies the existing install into `~/Library/Application Support/OpenScreen Local Builds/Installed App Backups/`, stages the replacement under `/Applications`, swaps it by rename, restores the previous app if validation fails, and then reopens the validated install. Repository edits do not reach the installed app until this command succeeds.
 
 TypeScript is `5.9.3`, Vite is `7.3.2`, Electron is `41.2.1`, and electron-builder is `26.8.1` in `package.json`. Native versions are controlled by their platform tools and project files rather than a single repository-wide compiler version.

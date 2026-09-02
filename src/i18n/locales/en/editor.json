@@ -102,6 +102,8 @@
 		"source": "Source",
 		"systemPicker": "Your system will ask what to share",
 		"systemAudio": "System audio",
+		"hideDesktopIcons": "Hide desktop icons",
+		"hideDesktopIconsHint": "Hidden only in the recording",
 		"microphone": "Microphone",
 		"camera": "Camera",
 		"cursorHighlight": "Cursor highlight",

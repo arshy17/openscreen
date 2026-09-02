@@ -274,6 +274,8 @@
 		"clipLabel": "Clip {{index}}",
 		"noClipTranscript": "Clip này chưa có bản chép lời — mở thẻ tài nguyên và tạo lại.",
 		"editorAria": "Bản chép lời của {{filename}}",
+		"editHint": "Nhấp đúp vào một từ để sửa. Backspace hoặc Delete sẽ cắt từ khỏi video.",
+		"editWord": "Sửa “{{word}}”",
 		"silence": "[khoảng lặng {{duration}} giây]",
 		"restoreSilence": "Khôi phục khoảng lặng ({{duration}} giây)",
 		"trimSilence": "Cắt khoảng lặng ({{duration}} giây)",
@@ -283,6 +285,7 @@
 	"captions": {
 		"show": "Hiện phụ đề",
 		"noTranscript": "Phụ đề được lấy từ bản chép lời của media. Hãy chép lời video này để bật phụ đề.",
+		"noSpeechDetected": "Không phát hiện lời nói trong bản ghi này. Phụ đề cần âm thanh nghe được từ micrô hoặc hệ thống.",
 		"transcribe": "Chép lời video",
 		"transcribing": "Đang chép lời…",
 		"derivedFromTranscript": "{{count}} dòng phụ đề, được tạo trực tiếp từ bản chép lời.",
@@ -327,6 +330,19 @@
 		"title": "Âm thanh",
 		"outputGain": "Mức đầu ra",
 		"reset": "Đặt lại âm thanh",
-		"help": "Điều chỉnh mức đầu ra của âm thanh. Nó được áp dụng giống hệt nhau trong bản xem trước và khi xuất."
+		"help": "Điều chỉnh mức đầu ra của âm thanh. Nó được áp dụng giống hệt nhau trong bản xem trước và khi xuất.",
+		"backgroundMusic": "Nhạc nền",
+		"music": "Âm nhạc",
+		"noMusic": "Chưa thêm nhạc",
+		"addMusic": "Thêm nhạc",
+		"replaceMusic": "Thay nhạc",
+		"removeMusic": "Xóa nhạc",
+		"musicLevel": "Mức nhạc",
+		"loopMusic": "Lặp để phủ hết video",
+		"fadeIn": "Mờ dần vào",
+		"fadeOut": "Mờ dần ra",
+		"musicAdded": "Đã thêm nhạc nền",
+		"couldNotAddMusic": "Không thể thêm nhạc nền",
+		"couldNotReadMusic": "Không thể đọc tệp âm thanh này."
 	}
 }

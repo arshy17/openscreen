@@ -102,6 +102,8 @@
 		"source": "來源",
 		"systemPicker": "系統將詢問要分享的內容",
 		"systemAudio": "系統音訊",
+		"hideDesktopIcons": "隱藏桌面圖示",
+		"hideDesktopIconsHint": "僅在錄影片段中隱藏",
 		"microphone": "麥克風",
 		"camera": "攝影機",
 		"cursorHighlight": "游標醒目提示",

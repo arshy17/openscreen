@@ -16,7 +16,9 @@
 		"pressTrim": "Premi T per aggiungere taglio",
 		"pressAnnotation": "Premi A per aggiungere annotazione",
 		"pressSpeed": "Premi S per aggiungere velocità",
-		"pressCameraFullscreen": "Premi C per aggiungere un segmento Camera a schermo intero"
+		"pressCameraFullscreen": "Premi C per aggiungere un segmento Camera a schermo intero",
+		"denseRegions": "{{count}} modifiche — ingrandisci per modificare",
+		"denseRegionsHint": "Ingrandisci la timeline per modificare le singole aree."
 	},
 	"labels": {
 		"pan": "Panoramica",

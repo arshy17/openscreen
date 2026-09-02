@@ -274,6 +274,8 @@
 		"clipLabel": "Clip {{index}}",
 		"noClipTranscript": "Aucune transcription pour ce clip — ouvrez la fiche du média et relancez la génération.",
 		"editorAria": "Transcription de {{filename}}",
+		"editHint": "Double-cliquez sur un mot pour le corriger. Retour arrière ou Suppr coupe les mots de la vidéo.",
+		"editWord": "Corriger « {{word}} »",
 		"silence": "[silence {{duration}} s]",
 		"restoreSilence": "Restaurer le silence ({{duration}} s)",
 		"trimSilence": "Couper le silence ({{duration}} s)",
@@ -283,6 +285,7 @@
 	"captions": {
 		"show": "Afficher les sous-titres",
 		"noTranscript": "Les sous-titres sont issus de la transcription du média. Transcrivez cette vidéo pour les activer.",
+		"noSpeechDetected": "Aucune parole n'a été détectée dans cet enregistrement. Les sous-titres nécessitent un son audible du microphone ou du système.",
 		"transcribe": "Transcrire la vidéo",
 		"transcribing": "Transcription…",
 		"derivedFromTranscript": "{{count}} lignes de sous-titres, dérivées de la transcription en direct.",
@@ -327,6 +330,19 @@
 		"title": "Audio",
 		"outputGain": "Niveau de sortie",
 		"reset": "Réinitialiser l’audio",
-		"help": "Ajustez le niveau de sortie audio. Il s’applique à l’identique dans l’aperçu et à l’export."
+		"help": "Ajustez le niveau de sortie audio. Il s’applique à l’identique dans l’aperçu et à l’export.",
+		"backgroundMusic": "Musique de fond",
+		"music": "Musique",
+		"noMusic": "Aucune musique ajoutée",
+		"addMusic": "Ajouter une musique",
+		"replaceMusic": "Remplacer la musique",
+		"removeMusic": "Supprimer la musique",
+		"musicLevel": "Niveau de la musique",
+		"loopMusic": "Boucler pour remplir la vidéo",
+		"fadeIn": "Fondu d’entrée",
+		"fadeOut": "Fondu de sortie",
+		"musicAdded": "Musique de fond ajoutée",
+		"couldNotAddMusic": "Impossible d’ajouter la musique de fond",
+		"couldNotReadMusic": "Ce fichier audio n’a pas pu être lu."
 	}
 }

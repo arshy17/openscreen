@@ -9,6 +9,8 @@
 		"useVerticalTray": "Use vertical tray",
 		"useHorizontalTray": "Use horizontal tray",
 		"openStudio": "Open Studio",
+		"hideDesktopIcons": "Hide desktop icons in recording",
+		"showDesktopIcons": "Show desktop icons in recording",
 		"openNotes": "Open Notes",
 		"openNotesPlaceholder": "Take notes here...",
 		"notesToolbar": {

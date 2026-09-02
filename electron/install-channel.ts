@@ -26,6 +26,8 @@ export type InstallChannel =
 	| "flatpak"
 	| "snap"
 	| "nix"
+	/** Private local beta. Rebuilt from source and deliberately disconnected from upstream. */
+	| "custom-local"
 	/** Unpacked `npm run dev`, or a build we cannot classify. */
 	| "dev"
 	| "unknown";
@@ -68,6 +70,8 @@ const PLATFORM_OWNED: ReadonlySet<InstallChannel> = new Set<InstallChannel>([
 	"nix",
 ]);
 
+const UPDATES_DISABLED: ReadonlySet<InstallChannel> = new Set<InstallChannel>(["custom-local"]);
+
 /** Pure decision table. Order matters: the platform-owned markers are checked FIRST because
  *  they coexist with the self-owned ones — a Flatpak build still carries a `package-type`
  *  file, and a Snap still looks like a plain Linux install from the inside. */
@@ -92,6 +96,7 @@ export function classifyInstall(probe: InstallProbe): InstallChannel {
 	) {
 		return probe.packageType;
 	}
+	if (probe.packageType === "custom-local") return "custom-local";
 	if (probe.platform === "win32") return "nsis";
 	if (probe.platform === "darwin") return "dmg";
 
@@ -126,7 +131,7 @@ export function offersUpdateCheck(
 	channel: InstallChannel,
 	state: { readonly recording: boolean },
 ): boolean {
-	return !platformOwnsUpdates(channel) && !state.recording;
+	return !platformOwnsUpdates(channel) && !UPDATES_DISABLED.has(channel) && !state.recording;
 }
 
 /** Memoized: `probeInstall()` touches the filesystem, and the answer cannot change while the

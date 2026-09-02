@@ -20,6 +20,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
 const ROOT = path.join(__dirname, "..");
 const ADDON = path.join(ROOT, "electron/native/compositor-view/build/compositor_view.node");
@@ -122,6 +123,12 @@ const MAC_REQUIRED = [
 		match: (name) => name === "openscreen-screencapturekit-helper",
 		what: "the ScreenCaptureKit capture helper",
 		breaks: "native screen capture is unavailable",
+		fix: "Build it with:\n\n    npm run build:native:mac",
+	},
+	{
+		match: (name) => name === "openscreen-privacy-vision-helper",
+		what: "the local Vision privacy-review helper",
+		breaks: "face and sensitive on-screen text review is unavailable",
 		fix: "Build it with:\n\n    npm run build:native:mac",
 	},
 ];
@@ -569,6 +576,34 @@ const MAX_SYMBOL_VERSION = { GLIBC: "2.35", GLIBCXX: "3.4.30", CXXABI: "1.3.13" 
  * gets deleted.
  */
 const MAC_MIN_OS_FLOOR = "13.0";
+const MAC_FLOOR_MODE = process.env.OPENSCREEN_MACOS_FLOOR ?? "";
+
+/**
+ * A developer may package for the macOS version running on their own machine without
+ * weakening the public floor. This is refused in CI and still compares every payload
+ * against a real ceiling; it never disables the Mach-O scan.
+ */
+function resolveMacOsFloor() {
+	if (!MAC_FLOOR_MODE) return { floor: MAC_MIN_OS_FLOOR, pinned: true };
+	if (MAC_FLOOR_MODE !== "host") {
+		throw new Error(
+			`OPENSCREEN_MACOS_FLOOR=${MAC_FLOOR_MODE} is not supported; use "host" or unset it.`,
+		);
+	}
+	if (process.env.CI) {
+		throw new Error(
+			"OPENSCREEN_MACOS_FLOOR=host is refused under CI; released builds must keep the public macOS floor.",
+		);
+	}
+	if (process.platform !== "darwin") {
+		throw new Error("OPENSCREEN_MACOS_FLOOR=host is only valid while packaging on macOS.");
+	}
+	const floor = execFileSync("sw_vers", ["-productVersion"], { encoding: "utf8" }).trim();
+	if (!/^\d+(?:\.\d+){1,2}$/.test(floor)) {
+		throw new Error(`Could not determine the host macOS version: ${JSON.stringify(floor)}`);
+	}
+	return { floor, pinned: false };
+}
 
 /**
  * The one supported way past the ceiling, for the one case it does not fit: a developer
@@ -786,6 +821,7 @@ function resolveSymbolCeiling() {
 // without a payload to scan — so they are tested rather than trusted.
 exports.__testing = {
 	resolveSymbolCeiling,
+	resolveMacOsFloor,
 	MAX_SYMBOL_VERSION,
 	machoMinOs,
 	checkMacOsVersionFloor,
@@ -988,6 +1024,7 @@ function machoFilesUnder(dir) {
 
 /** Nothing we ship may demand a newer macOS than MAC_MIN_OS_FLOOR. */
 function checkMacOsVersionFloor(dir) {
+	const { floor, pinned } = resolveMacOsFloor();
 	const scanned = machoFilesUnder(dir).map((file) => ({
 		name: path.relative(dir, file),
 		minOs: machoMinOs(file),
@@ -1008,17 +1045,17 @@ function checkMacOsVersionFloor(dir) {
 	}
 
 	const offenders = scanned.filter(
-		(entry) => entry.minOs && compareVersions(entry.minOs, MAC_MIN_OS_FLOOR) > 0,
+		(entry) => entry.minOs && compareVersions(entry.minOs, floor) > 0,
 	);
 	if (offenders.length === 0) {
 		return;
 	}
 
 	throw new Error(
-		`Refusing to package binaries that demand a newer macOS than the ${MAC_MIN_OS_FLOOR} floor\n` +
-			"the app claims to support.\n\n" +
+		`Refusing to package binaries that demand a newer macOS than the ${floor} floor\n` +
+			(pinned ? "the app claims to support.\n\n" : "available to this local host override.\n\n") +
 			`  looked in: ${path.relative(ROOT, dir)}\n\n` +
-			`${offenders.map((o) => `  - ${o.name} is built for macOS ${o.minOs} (floor ${MAC_MIN_OS_FLOOR})`).join("\n")}\n\n` +
+			`${offenders.map((o) => `  - ${o.name} is built for macOS ${o.minOs} (floor ${floor})`).join("\n")}\n\n` +
 			"Almost certainly nothing asked for this: clang and CMake default the deployment\n" +
 			"target to the BUILD MACHINE's SDK, so this usually means a build script forgot to\n" +
 			"pin one and the floor followed whatever image compiled it. CI's macos-latest moves\n" +

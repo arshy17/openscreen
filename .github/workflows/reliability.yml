@@ -1,0 +1,56 @@
+name: Reliability gates
+
+on:
+  pull_request:
+    branches: [main, feat/ai-edition, "release/**"]
+  workflow_dispatch:
+
+jobs:
+  project-safety-and-performance:
+    name: Project safety and long-edit budget
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Recovery, portable media, AI review, privacy, and performance
+        run: npm run test:reliability
+      - name: Create and verify source/native manifest
+        shell: bash
+        run: |
+          manifest="$(npm run build:custom:manifest --silent)"
+          npm run verify:custom-build --silent -- "$manifest"
+
+  native-audio-dsp:
+    name: Native audio DSP (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install libclang (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev
+      - name: Vendor ffmpeg SDK (Linux)
+        if: runner.os == 'Linux'
+        run: npm run fetch:ffmpeg:sdk
+      - name: Vendor ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: npm run fetch:ffmpeg
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Test audio DSP
+        shell: bash
+        env:
+          MAC_FFMPEG_DIR: /opt/homebrew/opt/ffmpeg
+        run: cargo test --manifest-path crates/Cargo.toml -p openscreen-compositor --lib audio::tests

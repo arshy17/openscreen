@@ -9,6 +9,8 @@
 		"useVerticalTray": "세로 트레이 사용",
 		"useHorizontalTray": "가로 트레이 사용",
 		"openStudio": "스튜디오 열기",
+		"hideDesktopIcons": "녹화에서 데스크톱 아이콘 숨기기",
+		"showDesktopIcons": "녹화에서 데스크톱 아이콘 표시",
 		"openNotes": "노트 열기",
 		"openNotesPlaceholder": "여기에 메모를 입력하세요...",
 		"notesToolbar": {

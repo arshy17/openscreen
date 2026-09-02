@@ -102,6 +102,8 @@
 		"source": "المصدر",
 		"systemPicker": "سيسألك النظام عمّا تريد مشاركته",
 		"systemAudio": "صوت النظام",
+		"hideDesktopIcons": "إخفاء أيقونات سطح المكتب",
+		"hideDesktopIconsHint": "تُخفى في التسجيل فقط",
 		"microphone": "الميكروفون",
 		"camera": "الكاميرا",
 		"cursorHighlight": "إبراز المؤشر",

@@ -102,6 +102,8 @@
 		"source": "소스",
 		"systemPicker": "공유할 대상을 시스템이 묻습니다",
 		"systemAudio": "시스템 오디오",
+		"hideDesktopIcons": "데스크톱 아이콘 숨기기",
+		"hideDesktopIconsHint": "녹화 영상에서만 숨깁니다",
 		"microphone": "마이크",
 		"camera": "카메라",
 		"cursorHighlight": "커서 강조",

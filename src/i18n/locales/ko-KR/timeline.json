@@ -16,7 +16,9 @@
 		"pressTrim": "T를 눌러 트림 추가",
 		"pressAnnotation": "A를 눌러 주석 추가",
 		"pressSpeed": "S를 눌러 속도 추가",
-		"pressCameraFullscreen": "C를 눌러 전체 화면 카메라 구간을 추가하세요"
+		"pressCameraFullscreen": "C를 눌러 전체 화면 카메라 구간을 추가하세요",
+		"denseRegions": "편집 {{count}}개 — 확대하여 편집",
+		"denseRegionsHint": "개별 구간을 편집하려면 타임라인을 확대하세요."
 	},
 	"labels": {
 		"pan": "이동",

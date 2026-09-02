@@ -79,6 +79,8 @@
 		"saveGif": "保存导出的 GIF",
 		"saveVideo": "保存导出的视频",
 		"selectVideo": "选择视频文件",
+		"selectAudio": "选择背景音乐",
+		"audioFiles": "音频文件",
 		"saveProject": "保存 OpenScreen 项目",
 		"openProject": "打开 OpenScreen 项目",
 		"gifImage": "GIF 图片",

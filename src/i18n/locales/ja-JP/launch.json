@@ -9,6 +9,8 @@
 		"useVerticalTray": "縦型トレイを使用",
 		"useHorizontalTray": "横型トレイを使用",
 		"openStudio": "スタジオを開く",
+		"hideDesktopIcons": "録画でデスクトップアイコンを隠す",
+		"showDesktopIcons": "録画でデスクトップアイコンを表示",
 		"openNotes": "ノートを開く",
 		"openNotesPlaceholder": "ここにメモを入力...",
 		"notesToolbar": {

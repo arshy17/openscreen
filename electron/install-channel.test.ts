@@ -40,6 +40,15 @@ describe("classifyInstall", () => {
 		}
 	});
 
+	it("classifies the private local beta without enabling the upstream updater", () => {
+		expect(classifyInstall(probe({ platform: "darwin", packageType: "custom-local" }))).toBe(
+			"custom-local",
+		);
+		expect(ownsItsUpdates("custom-local")).toBe(false);
+		expect(platformOwnsUpdates("custom-local")).toBe(false);
+		expect(offersUpdateCheck("custom-local", { recording: false })).toBe(false);
+	});
+
 	it("classifies the channels a package manager owns", () => {
 		expect(classifyInstall(probe({ platform: "win32", windowsStore: true }))).toBe("store");
 		expect(classifyInstall(probe({ env: { FLATPAK_ID: "com.getopenscreen.OpenScreen" } }))).toBe(
@@ -92,7 +101,15 @@ describe("ownsItsUpdates", () => {
 	});
 
 	it("refuses self-update wherever a package manager owns it", () => {
-		for (const channel of ["store", "flatpak", "snap", "nix", "dev", "unknown"] as const) {
+		for (const channel of [
+			"store",
+			"flatpak",
+			"snap",
+			"nix",
+			"custom-local",
+			"dev",
+			"unknown",
+		] as const) {
 			expect(ownsItsUpdates(channel)).toBe(false);
 		}
 	});
@@ -129,6 +146,7 @@ describe("platformOwnsUpdates", () => {
 			"nix",
 			"dev",
 			"unknown",
+			"custom-local",
 		] as const;
 		for (const channel of all) {
 			expect(ownsItsUpdates(channel) && platformOwnsUpdates(channel)).toBe(false);
@@ -179,5 +197,10 @@ describe("offersUpdateCheck", () => {
 		for (const channel of PACKAGE_MANAGED) {
 			expect(offersUpdateCheck(channel, { recording: true })).toBe(false);
 		}
+	});
+
+	it("never offers upstream updates to a custom local beta", () => {
+		expect(offersUpdateCheck("custom-local", { recording: false })).toBe(false);
+		expect(offersUpdateCheck("custom-local", { recording: true })).toBe(false);
 	});
 });

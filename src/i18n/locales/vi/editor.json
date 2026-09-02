@@ -102,6 +102,8 @@
 		"source": "Nguồn",
 		"systemPicker": "Hệ thống sẽ hỏi bạn muốn chia sẻ gì",
 		"systemAudio": "Âm thanh hệ thống",
+		"hideDesktopIcons": "Ẩn biểu tượng màn hình nền",
+		"hideDesktopIconsHint": "Chỉ ẩn trong bản ghi",
 		"microphone": "Micro",
 		"camera": "Máy ảnh",
 		"cursorHighlight": "Làm nổi bật con trỏ",

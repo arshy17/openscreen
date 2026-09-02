@@ -16,7 +16,9 @@
 		"pressTrim": "Appuyez sur T pour ajouter une coupe",
 		"pressAnnotation": "Appuyez sur A pour ajouter une annotation",
 		"pressSpeed": "Appuyez sur S pour ajouter une vitesse",
-		"pressCameraFullscreen": "Appuyez sur C pour ajouter un segment Caméra plein écran"
+		"pressCameraFullscreen": "Appuyez sur C pour ajouter un segment Caméra plein écran",
+		"denseRegions": "{{count}} modifications — zoomez pour modifier",
+		"denseRegionsHint": "Zoomez dans la timeline pour modifier chaque zone."
 	},
 	"labels": {
 		"pan": "Panoramique",

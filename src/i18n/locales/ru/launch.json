@@ -9,6 +9,8 @@
 		"useVerticalTray": "Использовать вертикальную панель",
 		"useHorizontalTray": "Использовать горизонтальную панель",
 		"openStudio": "Открыть студию",
+		"hideDesktopIcons": "Скрыть значки рабочего стола в записи",
+		"showDesktopIcons": "Показать значки рабочего стола в записи",
 		"openNotes": "Открыть заметки",
 		"openNotesPlaceholder": "Пишите заметки здесь...",
 		"notesToolbar": {

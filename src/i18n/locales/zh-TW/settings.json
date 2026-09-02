@@ -275,6 +275,8 @@
 		"clipLabel": "片段 {{index}}",
 		"noClipTranscript": "此片段沒有逐字稿 — 請開啟素材卡片並重新產生。",
 		"editorAria": "{{filename}} 的逐字稿",
+		"editHint": "按兩下單字即可更正。Backspace 或 Delete 會從影片中剪除單字。",
+		"editWord": "更正「{{word}}」",
 		"silence": "[靜音 {{duration}} 秒]",
 		"restoreSilence": "還原靜音（{{duration}} 秒）",
 		"trimSilence": "修剪靜音（{{duration}} 秒）",
@@ -284,6 +286,7 @@
 	"captions": {
 		"show": "顯示字幕",
 		"noTranscript": "字幕取自媒體的逐字稿。請先為這部影片產生逐字稿以啟用字幕。",
+		"noSpeechDetected": "此錄製中未偵測到語音。字幕需要可聽見的麥克風或系統音訊。",
 		"transcribe": "為影片產生逐字稿",
 		"transcribing": "轉錄中…",
 		"derivedFromTranscript": "{{count}} 行字幕，即時由逐字稿產生。",
@@ -328,6 +331,19 @@
 		"title": "音訊",
 		"outputGain": "輸出音量",
 		"reset": "重設音訊",
-		"help": "調整音訊輸出電平。它在預覽與匯出中的效果完全一致。"
+		"help": "調整音訊輸出電平。它在預覽與匯出中的效果完全一致。",
+		"backgroundMusic": "背景音樂",
+		"music": "音樂",
+		"noMusic": "尚未加入音樂",
+		"addMusic": "加入音樂",
+		"replaceMusic": "替換音樂",
+		"removeMusic": "移除音樂",
+		"musicLevel": "音樂音量",
+		"loopMusic": "循環至影片結束",
+		"fadeIn": "淡入",
+		"fadeOut": "淡出",
+		"musicAdded": "已加入背景音樂",
+		"couldNotAddMusic": "無法加入背景音樂",
+		"couldNotReadMusic": "無法讀取此音訊檔案。"
 	}
 }

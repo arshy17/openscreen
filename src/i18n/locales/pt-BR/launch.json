@@ -9,6 +9,8 @@
 		"useVerticalTray": "Usar bandeja vertical",
 		"useHorizontalTray": "Usar bandeja horizontal",
 		"openStudio": "Abrir Studio",
+		"hideDesktopIcons": "Ocultar ícones da mesa na gravação",
+		"showDesktopIcons": "Mostrar ícones da mesa na gravação",
 		"openNotes": "Abrir notas",
 		"openNotesPlaceholder": "Escreva suas notas aqui...",
 		"notesToolbar": {

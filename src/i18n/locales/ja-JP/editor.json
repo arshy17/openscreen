@@ -102,6 +102,8 @@
 		"source": "ソース",
 		"systemPicker": "共有する対象はシステムが確認します",
 		"systemAudio": "システム音声",
+		"hideDesktopIcons": "デスクトップアイコンを隠す",
+		"hideDesktopIconsHint": "録画映像でのみ非表示になります",
 		"microphone": "マイク",
 		"camera": "カメラ",
 		"cursorHighlight": "カーソルの強調表示",

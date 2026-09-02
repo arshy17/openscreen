@@ -9,6 +9,8 @@
 		"useVerticalTray": "Usa barra verticale",
 		"useHorizontalTray": "Usa barra orizzontale",
 		"openStudio": "Apri Studio",
+		"hideDesktopIcons": "Nascondi le icone della scrivania nella registrazione",
+		"showDesktopIcons": "Mostra le icone della scrivania nella registrazione",
 		"openNotes": "Apri note",
 		"openNotesPlaceholder": "Scrivi le tue note qui...",
 		"notesToolbar": {

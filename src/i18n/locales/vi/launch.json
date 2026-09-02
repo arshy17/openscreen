@@ -9,6 +9,8 @@
 		"useVerticalTray": "Dùng khay dọc",
 		"useHorizontalTray": "Dùng khay ngang",
 		"openStudio": "Mở Studio",
+		"hideDesktopIcons": "Ẩn biểu tượng màn hình nền trong bản ghi",
+		"showDesktopIcons": "Hiện biểu tượng màn hình nền trong bản ghi",
 		"openNotes": "Mở ghi chú",
 		"openNotesPlaceholder": "Ghi chú của bạn tại đây...",
 		"notesToolbar": {

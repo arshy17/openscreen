@@ -101,6 +101,9 @@ opencode.json
 # Frames dumped by `npm run bench:export -- --dumpFrame=N`, for eyes only.
 bench-frame-*.png
 
+# Accidental root-level Vite chunks from ad-hoc renderer extraction.
+/AiEditionShell-*.js
+
 # POC inputs (real recordings) and outputs — big, and not source.
 poc/media/
 poc/out/

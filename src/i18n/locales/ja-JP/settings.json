@@ -274,6 +274,8 @@
 		"clipLabel": "クリップ {{index}}",
 		"noClipTranscript": "このクリップには文字起こしがありません。アセットカードを開いて再生成してください。",
 		"editorAria": "{{filename}} の文字起こし",
+		"editHint": "単語をダブルクリックして修正します。Backspace または Delete で動画から単語をカットします。",
+		"editWord": "「{{word}}」を修正",
 		"silence": "[無音 {{duration}} 秒]",
 		"restoreSilence": "無音を元に戻す（{{duration}} 秒）",
 		"trimSilence": "無音をトリム（{{duration}} 秒）",
@@ -283,6 +285,7 @@
 	"captions": {
 		"show": "字幕を表示",
 		"noTranscript": "字幕はメディアの文字起こしから読み込まれます。有効にするにはこの動画を文字起こししてください。",
+		"noSpeechDetected": "この録画では話し声が検出されませんでした。字幕には、マイクまたはシステムの聞こえる音声が必要です。",
 		"transcribe": "動画を文字起こし",
 		"transcribing": "文字起こし中…",
 		"derivedFromTranscript": "文字起こしからリアルタイムに生成された字幕 {{count}} 行。",
@@ -327,6 +330,19 @@
 		"title": "オーディオ",
 		"outputGain": "出力レベル",
 		"reset": "オーディオをリセット",
-		"help": "音声の出力レベルを調整します。プレビューと書き出しで同じように適用されます。"
+		"help": "音声の出力レベルを調整します。プレビューと書き出しで同じように適用されます。",
+		"backgroundMusic": "BGM",
+		"music": "音楽",
+		"noMusic": "音楽は追加されていません",
+		"addMusic": "音楽を追加",
+		"replaceMusic": "音楽を置き換え",
+		"removeMusic": "音楽を削除",
+		"musicLevel": "音楽レベル",
+		"loopMusic": "動画の長さまで繰り返す",
+		"fadeIn": "フェードイン",
+		"fadeOut": "フェードアウト",
+		"musicAdded": "BGMを追加しました",
+		"couldNotAddMusic": "BGMを追加できませんでした",
+		"couldNotReadMusic": "この音声ファイルを読み込めませんでした。"
 	}
 }

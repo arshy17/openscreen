@@ -102,6 +102,8 @@
 		"source": "Kaynak",
 		"systemPicker": "Sisteminiz neyi paylaşacağınızı soracak",
 		"systemAudio": "Sistem sesi",
+		"hideDesktopIcons": "Masaüstü simgelerini gizle",
+		"hideDesktopIconsHint": "Yalnızca kayıtta gizlenir",
 		"microphone": "Mikrofon",
 		"camera": "Kamera",
 		"cursorHighlight": "İmleç vurgusu",

@@ -16,7 +16,9 @@
 		"pressTrim": "Tキーを押してトリムを追加",
 		"pressAnnotation": "Aキーを押して注釈を追加",
 		"pressSpeed": "Sキーを押して再生速度を追加",
-		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加"
+		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加",
+		"denseRegions": "{{count}}件の編集 — 拡大して編集",
+		"denseRegionsHint": "タイムラインを拡大して各範囲を編集します。"
 	},
 	"labels": {
 		"pan": "移動",

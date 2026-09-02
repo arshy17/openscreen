@@ -102,6 +102,8 @@
 		"source": "来源",
 		"systemPicker": "系统将询问要共享的内容",
 		"systemAudio": "系统音频",
+		"hideDesktopIcons": "隐藏桌面图标",
+		"hideDesktopIconsHint": "仅在录制画面中隐藏",
 		"microphone": "麦克风",
 		"camera": "摄像头",
 		"cursorHighlight": "光标高亮",

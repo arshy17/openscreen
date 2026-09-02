@@ -77,7 +77,20 @@
 		"title": "Audio",
 		"help": "Adjust the audio output level. It applies identically in the preview and the export.",
 		"outputGain": "Output level",
-		"reset": "Reset audio"
+		"reset": "Reset audio",
+		"backgroundMusic": "Background music",
+		"music": "Music",
+		"noMusic": "No soundtrack added",
+		"addMusic": "Add music",
+		"replaceMusic": "Replace music",
+		"removeMusic": "Remove music",
+		"musicLevel": "Music level",
+		"loopMusic": "Loop to fill the video",
+		"fadeIn": "Fade in",
+		"fadeOut": "Fade out",
+		"musicAdded": "Background music added",
+		"couldNotAddMusic": "Could not add background music",
+		"couldNotReadMusic": "This audio file could not be read."
 	},
 	"effects": {
 		"title": "Composition",
@@ -280,6 +293,8 @@
 		"clipLabel": "Clip {{index}}",
 		"noClipTranscript": "No transcript for this clip — open the asset card and regenerate.",
 		"editorAria": "Transcript for {{filename}}",
+		"editHint": "Double-click a word to correct it. Backspace or Delete cuts words from the video.",
+		"editWord": "Correct “{{word}}”",
 		"silence": "[silence {{duration}}s]",
 		"restoreSilence": "Restore silence ({{duration}}s)",
 		"trimSilence": "Trim silence ({{duration}}s)",
@@ -289,6 +304,7 @@
 	"captions": {
 		"show": "Show captions",
 		"noTranscript": "Captions are read from the media transcript. Transcribe this video to turn them on.",
+		"noSpeechDetected": "No spoken words were detected in this recording. Captions need audible microphone or system audio.",
 		"transcribe": "Transcribe video",
 		"transcribing": "Transcribing…",
 		"derivedFromTranscript": "{{count}} caption lines, derived live from the transcript.",

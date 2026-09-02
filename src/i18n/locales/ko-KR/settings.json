@@ -274,6 +274,8 @@
 		"clipLabel": "클립 {{index}}",
 		"noClipTranscript": "이 클립에는 전사가 없습니다. 에셋 카드를 열고 다시 생성하세요.",
 		"editorAria": "{{filename}}의 전사",
+		"editHint": "단어를 두 번 클릭하여 수정하세요. Backspace 또는 Delete는 영상에서 단어를 잘라냅니다.",
+		"editWord": "“{{word}}” 수정",
 		"silence": "[무음 {{duration}}초]",
 		"restoreSilence": "무음 복원 ({{duration}}초)",
 		"trimSilence": "무음 자르기 ({{duration}}초)",
@@ -283,6 +285,7 @@
 	"captions": {
 		"show": "자막 표시",
 		"noTranscript": "자막은 미디어 전사에서 읽어옵니다. 켜려면 이 동영상을 전사하세요.",
+		"noSpeechDetected": "이 녹화에서 음성이 감지되지 않았습니다. 자막에는 마이크 또는 시스템의 들리는 오디오가 필요합니다.",
 		"transcribe": "동영상 전사하기",
 		"transcribing": "전사 중…",
 		"derivedFromTranscript": "전사에서 실시간으로 생성된 자막 {{count}}줄.",
@@ -327,6 +330,19 @@
 		"title": "오디오",
 		"outputGain": "출력 레벨",
 		"reset": "오디오 재설정",
-		"help": "오디오 출력 레벨을 조정합니다. 미리보기와 내보내기에 동일하게 적용됩니다."
+		"help": "오디오 출력 레벨을 조정합니다. 미리보기와 내보내기에 동일하게 적용됩니다.",
+		"backgroundMusic": "배경 음악",
+		"music": "음악",
+		"noMusic": "추가된 음악 없음",
+		"addMusic": "음악 추가",
+		"replaceMusic": "음악 교체",
+		"removeMusic": "음악 제거",
+		"musicLevel": "음악 레벨",
+		"loopMusic": "영상 길이에 맞게 반복",
+		"fadeIn": "페이드 인",
+		"fadeOut": "페이드 아웃",
+		"musicAdded": "배경 음악이 추가되었습니다",
+		"couldNotAddMusic": "배경 음악을 추가할 수 없습니다",
+		"couldNotReadMusic": "이 오디오 파일을 읽을 수 없습니다."
 	}
 }
