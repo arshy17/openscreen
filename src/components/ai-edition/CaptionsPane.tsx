@@ -79,6 +79,7 @@ export function CaptionsPane() {
 		cues,
 		hasDocument,
 		hasTranscript,
+		hasCaptionableText,
 		set,
 		setLive,
 		commit,
@@ -234,6 +235,20 @@ export function CaptionsPane() {
 							{isTranscribing ? <Loader2 size={14} className="animate-spin" /> : null}
 							{isTranscribing ? t("captions.transcribing") : t("captions.transcribe")}
 						</button>
+					</div>
+				) : !hasCaptionableText ? (
+					<div
+						style={{
+							margin: "0 var(--sp-4) 12px",
+							padding: "12px 14px",
+							border: "1px solid var(--border)",
+							borderRadius: 10,
+							background: "var(--surface-warm)",
+						}}
+					>
+						<p style={{ margin: 0, font: "400 11.5px/1.5 var(--font-body)", color: "var(--fg-2)" }}>
+							{t("captions.noSpeechDetected")}
+						</p>
 					</div>
 				) : (
 					<p

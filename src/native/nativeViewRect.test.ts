@@ -100,12 +100,21 @@ describe("rectsEqual", () => {
 });
 
 describe("computePreviewRect", () => {
-	it("does not multiply the raw preview buffer on a Retina display", () => {
+	it("uses Retina density until the bounded preview ceiling is reached", () => {
 		expect(computePreviewRect({ left: 10, top: 20, width: 960, height: 540 }, 2)).toEqual({
-			x: 10,
-			y: 20,
-			width: 960,
-			height: 540,
+			x: 20,
+			y: 40,
+			width: PREVIEW_MAX_WIDTH,
+			height: PREVIEW_MAX_HEIGHT,
+		});
+	});
+
+	it("renders a smaller Retina preview at the full device-pixel size", () => {
+		expect(computePreviewRect({ left: 10, top: 20, width: 640, height: 360 }, 2)).toEqual({
+			x: 20,
+			y: 40,
+			width: 1280,
+			height: 720,
 		});
 	});
 

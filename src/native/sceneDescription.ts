@@ -382,18 +382,29 @@ export interface SceneDescription {
 	/**
 	 * Audio finishing, applied identically by the preview and by `finish_audio` (Rust).
 	 *
-	 * One field, and it takes some resisting to keep it that way. The preview plays the
-	 * untouched SOURCE file, seeked; the export runs on the assembled timeline — trimmed,
-	 * speed-adjusted, concatenated. A linear gain is the only operation that means the same
-	 * thing on both. Anything with memory (a filter, a compressor) diverges across cuts;
-	 * anything measured over the whole programme (a loudness normaliser) cannot be computed
-	 * preview-side at all; and even a plain delay diverges, because the preview would apply
-	 * it in source seconds while this applies it in timeline seconds — a 2x speed region
-	 * halves it, and near a cut the export pulls audio across the junction while the preview
-	 * only has the active asset. A sync offset shipped here and was removed for exactly that.
+	 * Gain is exact on both sides. The optional voice preset is mirrored by WebAudio for
+	 * interactive preview and applied once to the assembled programme for export; it is
+	 * omitted entirely until the user enables it. A sync offset remains intentionally absent
+	 * because source-time preview and timeline-time export cannot give it the same meaning.
 	 */
 	audio: {
 		gainDb: number;
+		enhancement?: {
+			preset: "clarity" | "podcast" | "broadcast";
+			intensity: number;
+			noiseReductionStrength: number;
+			targetLufs?: number;
+			limiterCeilingDb?: number;
+		};
+		backgroundMusic?: {
+			path: string;
+			durationSec: number;
+			gainDb: number;
+			loop: boolean;
+			fadeInSec: number;
+			fadeOutSec: number;
+			duckingAmountDb: number;
+		};
 	};
 	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
@@ -804,6 +815,43 @@ export function buildSceneDescription(
 		},
 		audio: {
 			gainDb: settings.audioGainDb,
+			...(settings.audioEnhancementEnabled
+				? {
+						enhancement: {
+							preset: settings.audioEnhancementPreset,
+							intensity: settings.audioEnhancementIntensity,
+							noiseReductionStrength: settings.audioNoiseReductionStrength,
+							...(settings.audioMasteringTarget !== "off"
+								? {
+										targetLufs:
+											settings.audioMasteringTarget === "social"
+												? -14
+												: settings.audioMasteringTarget === "podcast"
+													? -16
+													: -18,
+									}
+								: {}),
+							...(settings.audioLimiterEnabled
+								? { limiterCeilingDb: settings.audioLimiterCeilingDb }
+								: {}),
+						},
+					}
+				: {}),
+			...(settings.backgroundMusicPath && settings.backgroundMusicDurationSec > 0
+				? {
+						backgroundMusic: {
+							path: settings.backgroundMusicPath,
+							durationSec: settings.backgroundMusicDurationSec,
+							gainDb: settings.backgroundMusicGainDb,
+							loop: settings.backgroundMusicLoop,
+							fadeInSec: settings.backgroundMusicFadeInSec,
+							fadeOutSec: settings.backgroundMusicFadeOutSec,
+							duckingAmountDb: settings.backgroundMusicDuckingEnabled
+								? settings.backgroundMusicDuckingAmountDb
+								: 0,
+						},
+					}
+				: {}),
 		},
 		background: parseWallpaper(settings.wallpaper),
 		zoomRegions: projectedZoomRegions.map((region) => ({

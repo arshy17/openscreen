@@ -21,15 +21,15 @@ use std::ffi::CString;
 use std::ptr;
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_audio,
+    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_program_audio,
     stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
 };
 use crate::config::Cfg;
 use crate::d3d::Gpu;
 use crate::ffi::AVFrame;
 use crate::linux_decode::SwDecoder;
-use crate::timeline_walk::NextFrameTime;
 use crate::linux_frames::CpuFrames;
+use crate::timeline_walk::NextFrameTime;
 
 /// `SWS_POINT` (plus proche voisin). Bindgen ne genere pas les `SWS_*` (macros),
 /// valeur figee par l'ABI de libswscale -- comme `linux_frames::SWS_POINT`.
@@ -215,7 +215,13 @@ impl VideoEncoder {
         }
     }
 
-    pub fn open(codec: &ExportCodec, w: i32, h: i32, fps: i32, bit_rate: i64) -> Result<VideoEncoder> {
+    pub fn open(
+        codec: &ExportCodec,
+        w: i32,
+        h: i32,
+        fps: i32,
+        bit_rate: i64,
+    ) -> Result<VideoEncoder> {
         let forced = std::env::var("OPENSCREEN_EXPORT_ENCODER").ok();
         let mut refused: Vec<String> = Vec::new();
         // Liste par defaut, plus l'encodeur force s'il n'y figure pas (ex. h264_vaapi).
@@ -238,12 +244,21 @@ impl VideoEncoder {
             }
         }
         match forced {
-            Some(name) => bail!("OPENSCREEN_EXPORT_ENCODER={name} inutilisable : {}", refused.join(" ; ")),
+            Some(name) => bail!(
+                "OPENSCREEN_EXPORT_ENCODER={name} inutilisable : {}",
+                refused.join(" ; ")
+            ),
             None => bail!("aucun encodeur video utilisable : {}", refused.join(" ; ")),
         }
     }
 
-    unsafe fn try_open(name: &str, w: i32, h: i32, fps: i32, bit_rate: i64) -> Result<VideoEncoder> {
+    unsafe fn try_open(
+        name: &str,
+        w: i32,
+        h: i32,
+        fps: i32,
+        bit_rate: i64,
+    ) -> Result<VideoEncoder> {
         use crate::ffi::*;
         let cname = CString::new(name)?;
         let enc = avcodec_find_encoder_by_name(cname.as_ptr());
@@ -262,12 +277,21 @@ impl VideoEncoder {
         (*ctx).bit_rate = bit_rate;
         // MP4 : header global dans l'extradata (pas par-paquet).
         (*ctx).flags |= AV_CODEC_FLAG_GLOBAL_HEADER as i32;
-        if let Err(e) = averr(avcodec_open2(ctx, enc, ptr::null_mut()), "avcodec_open2(enc)") {
+        if let Err(e) = averr(
+            avcodec_open2(ctx, enc, ptr::null_mut()),
+            "avcodec_open2(enc)",
+        ) {
             avcodec_free_context(&mut ctx);
             return Err(e);
         }
         match alloc_sw_frame(AVPixelFormat::AV_PIX_FMT_YUV420P, w, h) {
-            Ok(sw) => Ok(VideoEncoder { ctx, sw, sws: ptr::null_mut(), w, h }),
+            Ok(sw) => Ok(VideoEncoder {
+                ctx,
+                sw,
+                sws: ptr::null_mut(),
+                w,
+                h,
+            }),
             Err(e) => {
                 avcodec_free_context(&mut ctx);
                 Err(e)
@@ -299,7 +323,11 @@ impl VideoEncoder {
                 ptr::null(),
             );
             if self.sws.is_null() {
-                bail!("sws_getContext {rw}x{rh} RGBA -> {}x{} YUV420P", self.w, self.h);
+                bail!(
+                    "sws_getContext {rw}x{rh} RGBA -> {}x{} YUV420P",
+                    self.w,
+                    self.h
+                );
             }
         }
         averr(av_frame_make_writable(self.sw), "make_writable")?;
@@ -347,7 +375,11 @@ impl Drop for VideoEncoder {
 
 /// Alloue une AVFrame systeme au format demande. Symetrique de
 /// `pipeline_macos::alloc_sw_frame`.
-unsafe fn alloc_sw_frame(pix_fmt: crate::ffi::AVPixelFormat::Type, w: i32, h: i32) -> Result<*mut AVFrame> {
+unsafe fn alloc_sw_frame(
+    pix_fmt: crate::ffi::AVPixelFormat::Type,
+    w: i32,
+    h: i32,
+) -> Result<*mut AVFrame> {
     let mut frame = crate::ffi::av_frame_alloc();
     if frame.is_null() {
         bail!("av_frame_alloc (encodeur)");
@@ -378,7 +410,10 @@ unsafe fn drain_encoder(
         }
         averr(r, "receive_packet")?;
         av_packet_rescale_ts(opkt, (*ectx).time_base, (*ostream).time_base);
-        averr(av_interleaved_write_frame(octx, opkt), "interleaved_write_frame")?;
+        averr(
+            av_interleaved_write_frame(octx, opkt),
+            "interleaved_write_frame",
+        )?;
         av_packet_unref(opkt);
     }
 }
@@ -423,7 +458,12 @@ pub fn run_composited_multi(
     let mut audio_encoder;
     unsafe {
         crate::ffi::averr(
-            crate::ffi::avformat_alloc_output_context2(&mut octx, ptr::null(), ptr::null(), outc.as_ptr()),
+            crate::ffi::avformat_alloc_output_context2(
+                &mut octx,
+                ptr::null(),
+                ptr::null(),
+                outc.as_ptr(),
+            ),
             "alloc_output_context2",
         )?;
         ostream = crate::ffi::avformat_new_stream(octx, ptr::null());
@@ -457,7 +497,10 @@ pub fn run_composited_multi(
     let mut clip_frame_counts: Vec<u64> = vec![0; clips.len()];
 
     let scene = comp.scene_snapshot();
-    let audio_settings = scene.as_ref().map(|scene| scene.audio).unwrap_or_default();
+    let audio_settings = scene
+        .as_ref()
+        .map(|scene| scene.audio.clone())
+        .unwrap_or_default();
     // Ring de staging a 2 : l'export ne veut que du debit, une frame de latence
     // ne se voit pas dans un fichier. Voir `Compositor::set_readback_depth` pour
     // la raison pour laquelle la preview, elle, reste a 1.
@@ -535,7 +578,7 @@ pub fn run_composited_multi(
         let declared_audio: Vec<bool> = clips.iter().map(|c| c.has_audio).collect();
         let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
         audio_encoder.encode(
-            &finish_audio(assemble_concatenated_pcm(&clip_pcm, &plan), audio_settings),
+            &finish_program_audio(assemble_concatenated_pcm(&clip_pcm, &plan), &audio_settings),
             octx,
         )?;
         crate::ffi::averr(crate::ffi::av_write_trailer(octx), "write_trailer")?;
@@ -549,7 +592,11 @@ pub fn run_composited_multi(
     Ok(Stats {
         frames,
         wall_s,
-        fps: if wall_s > 0.0 { frames as f64 / wall_s } else { 0.0 },
+        fps: if wall_s > 0.0 {
+            frames as f64 / wall_s
+        } else {
+            0.0
+        },
         video_duration_s: frames as f64 / out_fps as f64,
     })
 }

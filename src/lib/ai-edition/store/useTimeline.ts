@@ -29,6 +29,7 @@ import {
 	resolvePillIds,
 } from "../timeline/timelineMap";
 import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
+import { DEFAULT_ZOOM_DEPTH } from "../timeline/zoom-scale";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
 
@@ -229,7 +230,7 @@ export function useTimeline() {
 						id: createId("zoom"),
 						startMs: timeMs,
 						endMs,
-						depth: 3,
+						depth: DEFAULT_ZOOM_DEPTH,
 						focus: { cx: 0.5, cy: 0.5 },
 						focusMode: "manual" as const,
 					},
@@ -260,7 +261,7 @@ export function useTimeline() {
 							id: createId("zoom"),
 							startMs: Math.round(s.span.start),
 							endMs: Math.round(s.span.end),
-							depth: 3 as const,
+							depth: DEFAULT_ZOOM_DEPTH,
 							focus: { cx: s.focus.cx, cy: s.focus.cy },
 							focusMode: "auto" as const,
 						},

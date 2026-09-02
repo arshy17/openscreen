@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	applyPreviewAudioSettings,
+	backgroundMusicEnvelope,
 	type PreviewAudioGraph,
+	previewEnhancementParameters,
 	resolveAudioTrackPlayback,
 } from "./VirtualPreview";
 
@@ -10,6 +12,7 @@ function fakeGraph(): PreviewAudioGraph {
 	return {
 		context: {} as AudioContext,
 		gain: { gain: { value: Number.NaN } } as GainNode,
+		musicGain: { gain: { value: Number.NaN } } as GainNode,
 	};
 }
 
@@ -78,5 +81,38 @@ describe("applyPreviewAudioSettings", () => {
 		applyPreviewAudioSettings(graph, [element], -6.0206);
 		expect(element.volume).toBe(0.25);
 		expect(graph.gain.gain.value).toBeCloseTo(0.5, 4);
+	});
+
+	it("keeps soundtrack and programme levels independent inside the graph", () => {
+		const graph = fakeGraph();
+		applyPreviewAudioSettings(graph, [], -3, null, -18);
+		expect(graph.gain.gain.value).toBeCloseTo(10 ** (-3 / 20), 6);
+		expect(graph.musicGain.gain.value).toBeCloseTo(10 ** (-18 / 20), 6);
+	});
+});
+
+describe("backgroundMusicEnvelope", () => {
+	it("fades in and out against programme time", () => {
+		expect(backgroundMusicEnvelope(0, 10, 2, 2)).toBe(0);
+		expect(backgroundMusicEnvelope(1, 10, 2, 2)).toBe(0.5);
+		expect(backgroundMusicEnvelope(5, 10, 2, 2)).toBe(1);
+		expect(backgroundMusicEnvelope(9, 10, 2, 2)).toBe(0.5);
+		expect(backgroundMusicEnvelope(10, 10, 2, 2)).toBe(0);
+	});
+
+	it("does not fade when the controls are zero", () => {
+		expect(backgroundMusicEnvelope(0, 10, 0, 0)).toBe(1);
+		expect(backgroundMusicEnvelope(10, 10, 0, 0)).toBe(1);
+	});
+});
+
+describe("previewEnhancementParameters", () => {
+	it("clamps intensity and keeps the three local presets distinct", () => {
+		const clarity = previewEnhancementParameters("clarity", 0.5);
+		const podcast = previewEnhancementParameters("podcast", 0.5);
+		const broadcast = previewEnhancementParameters("broadcast", 2);
+		expect(clarity.ratio).toBeLessThan(podcast.ratio);
+		expect(podcast.cutoffHz).toBeLessThan(broadcast.cutoffHz);
+		expect(broadcast).toEqual(previewEnhancementParameters("broadcast", 1));
 	});
 });

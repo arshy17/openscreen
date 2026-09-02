@@ -43,9 +43,18 @@ export interface CaptionCue {
  *  the subtitle. Well clear of the annotation z-range, which counts up from 1. */
 export const CAPTION_Z_INDEX_BASE = 100_000;
 
+/** Whisper emits this sentinel when a chunk contains no audible speech. It is
+ *  metadata about the transcription pass, not text the viewer should see. */
+const NON_SPEECH_TRANSCRIPT_TOKENS = new Set(["[BLANK_AUDIO]"]);
+
+export function isCaptionableText(text: string): boolean {
+	const trimmed = text.trim();
+	return trimmed.length > 0 && !NON_SPEECH_TRANSCRIPT_TOKENS.has(trimmed.toUpperCase());
+}
+
 function toCaptionSegments(transcript: AxcutTranscript): CaptionSegment[] {
 	return transcript.words
-		.filter((word) => word.text.trim().length > 0)
+		.filter((word) => isCaptionableText(word.text))
 		.map((word) => ({ startSec: word.startSec, endSec: word.endSec, text: word.text }));
 }
 
@@ -58,7 +67,7 @@ function segmentWordsAsCaptionSegments(
 	const byId = new Map(transcript.words.map((w) => [w.id, w]));
 	return segment.wordIds
 		.map((id) => byId.get(id))
-		.filter((w): w is NonNullable<typeof w> => w !== undefined && w.text.trim().length > 0)
+		.filter((w): w is NonNullable<typeof w> => w !== undefined && isCaptionableText(w.text))
 		.map((w) => ({ startSec: w.startSec, endSec: w.endSec, text: w.text }));
 }
 
@@ -70,7 +79,7 @@ function segmentWordsAsCaptionSegments(
  */
 function textAsPseudoWords(startSec: number, endSec: number, text: string): CaptionSegment[] {
 	const trimmed = text.trim();
-	if (!trimmed) return [];
+	if (!isCaptionableText(trimmed)) return [];
 	return splitMergedCaptionsByWordBounds([{ startSec, endSec, text: trimmed }], 1, 1);
 }
 

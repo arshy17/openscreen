@@ -800,11 +800,8 @@ describe("buildSceneDescription.cropByClip", () => {
 
 describe("buildSceneDescription.audio", () => {
 	// The editor claims "what you hear is what you export". That only holds while this
-	// payload carries nothing the preview cannot reproduce on the raw source file it
-	// plays — which is a linear gain, and nothing else. These tests exist so a future
-	// stage with state (a filter, a compressor), one measured over the assembled
-	// programme (a loudness normaliser), or one expressed in timeline time (a sync
-	// offset — this shipped once and was removed) cannot be added here unnoticed.
+	// payload carries nothing the preview cannot reproduce. Gain is always present;
+	// the optional local voice chain is mirrored by WebAudio and is absent by default.
 	it("carries the authored gain through to the native payload", () => {
 		const doc = makeDoc({ legacyEditor: { audioGainDb: 4.5 } });
 		expect(buildSceneDescription(doc).audio).toEqual({ gainDb: 4.5 });
@@ -827,6 +824,77 @@ describe("buildSceneDescription.audio", () => {
 		expect(buildSceneDescription(makeDoc({ legacyEditor: { audioGainDb: 99 } })).audio).toEqual({
 			gainDb: 12,
 		});
+	});
+
+	it("includes an authored background soundtrack and leaves older projects unchanged", () => {
+		const scene = buildSceneDescription(
+			makeDoc({
+				legacyEditor: {
+					backgroundMusicPath: "/Music/bed.wav",
+					backgroundMusicName: "bed.wav",
+					backgroundMusicDurationSec: 31.25,
+					backgroundMusicGainDb: -18,
+					backgroundMusicLoop: false,
+					backgroundMusicFadeInSec: 1.5,
+					backgroundMusicFadeOutSec: 2,
+				},
+			}),
+		);
+		expect(scene.audio.backgroundMusic).toEqual({
+			path: "/Music/bed.wav",
+			durationSec: 31.25,
+			gainDb: -18,
+			loop: false,
+			fadeInSec: 1.5,
+			fadeOutSec: 2,
+			duckingAmountDb: 0,
+		});
+		expect(buildSceneDescription(makeDoc()).audio.backgroundMusic).toBeUndefined();
+	});
+
+	it("serializes local voice enhancement only after the user enables it", () => {
+		expect(buildSceneDescription(makeDoc()).audio.enhancement).toBeUndefined();
+		expect(
+			buildSceneDescription(
+				makeDoc({
+					legacyEditor: {
+						audioEnhancementEnabled: true,
+						audioEnhancementPreset: "podcast",
+						audioEnhancementIntensity: 0.7,
+					},
+				}),
+			).audio.enhancement,
+		).toEqual({
+			preset: "podcast",
+			intensity: 0.7,
+			noiseReductionStrength: 0,
+		});
+	});
+
+	it("serializes optional mastering, limiter, noise cleanup, and music ducking", () => {
+		const scene = buildSceneDescription(
+			makeDoc({
+				legacyEditor: {
+					audioEnhancementEnabled: true,
+					audioEnhancementPreset: "broadcast",
+					audioEnhancementIntensity: 0.8,
+					audioNoiseReductionStrength: 0.45,
+					audioMasteringTarget: "social",
+					audioLimiterEnabled: true,
+					audioLimiterCeilingDb: -1,
+					backgroundMusicPath: "/Music/bed.wav",
+					backgroundMusicDurationSec: 30,
+					backgroundMusicDuckingEnabled: true,
+					backgroundMusicDuckingAmountDb: 12,
+				},
+			}),
+		);
+		expect(scene.audio.enhancement).toMatchObject({
+			noiseReductionStrength: 0.45,
+			targetLufs: -14,
+			limiterCeilingDb: -1,
+		});
+		expect(scene.audio.backgroundMusic?.duckingAmountDb).toBe(12);
 	});
 });
 

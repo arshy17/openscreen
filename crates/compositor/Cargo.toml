@@ -7,6 +7,10 @@ description = "Compositeur natif multiplateforme d'OpenScreen : décodage, pipel
 [lib]
 name = "openscreen_compositor"
 path = "src/lib.rs"
+# Bindgen copies FFmpeg's prose examples into generated Rust doc comments.
+# They are not Rust programs; exercise this crate through its 180+ real unit
+# and integration tests instead of attempting to compile generated C prose.
+doctest = false
 
 [build-dependencies]
 bindgen = "0.70"

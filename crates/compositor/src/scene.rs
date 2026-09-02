@@ -168,13 +168,17 @@ pub struct SceneEffects {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum SceneBackground {
-    Color { color: String },
+    Color {
+        color: String,
+    },
     Gradient {
         #[serde(rename = "angleDeg")]
         angle_deg: f32,
         stops: Vec<String>,
     },
-    Image { path: String },
+    Image {
+        path: String,
+    },
 }
 
 /// Une annotation de la timeline (temps en secondes, source du clip).
@@ -407,17 +411,81 @@ pub struct SceneCrop {
     pub height: f32,
 }
 
-/// Audio finishing. Deliberately limited to a linear gain — the one operation the editor
-/// preview can apply identically to the source file it plays. See `audio::finish_audio`
-/// before adding a field here; a sync offset was tried and removed.
+/// Audio finishing. Gain is always present; optional voice enhancement is a user-enabled
+/// local chain mirrored in the WebAudio preview and applied to the assembled programme
+/// before background music. A sync offset was tried and remains intentionally absent.
 ///
 /// The field carries `#[serde(default)]`: a payload from a build that predates it must
 /// degrade to "that stage is neutral", not fail the whole scene.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneAudio {
     #[serde(default)]
     pub gain_db: f32,
+    #[serde(default)]
+    pub enhancement: Option<SceneAudioEnhancement>,
+    #[serde(default)]
+    pub background_music: Option<SceneBackgroundMusic>,
+}
+
+impl Default for SceneAudio {
+    fn default() -> Self {
+        Self {
+            gain_db: 0.0,
+            enhancement: None,
+            background_music: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAudioEnhancement {
+    pub preset: SceneAudioEnhancementPreset,
+    #[serde(default = "default_audio_enhancement_intensity")]
+    pub intensity: f32,
+    #[serde(default)]
+    pub noise_reduction_strength: f32,
+    #[serde(default)]
+    pub target_lufs: Option<f32>,
+    #[serde(default)]
+    pub limiter_ceiling_db: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SceneAudioEnhancementPreset {
+    Clarity,
+    Podcast,
+    Broadcast,
+}
+
+fn default_audio_enhancement_intensity() -> f32 {
+    0.5
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneBackgroundMusic {
+    pub path: String,
+    pub duration_sec: f64,
+    #[serde(default = "default_background_music_gain_db")]
+    pub gain_db: f32,
+    #[serde(default = "default_true")]
+    pub r#loop: bool,
+    #[serde(default)]
+    pub fade_in_sec: f32,
+    #[serde(default)]
+    pub fade_out_sec: f32,
+    #[serde(default)]
+    pub ducking_amount_db: f32,
+}
+
+fn default_background_music_gain_db() -> f32 {
+    -18.0
+}
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -520,17 +588,21 @@ impl Scene {
             overlaps_window && region_clip_index.map(|i| i == clip_index).unwrap_or(true)
         };
         let mut scene = self.clone();
-        scene.zoom_regions.retain(|region| {
-            belongs(region.clip_index, region.start_sec, region.end_sec)
-        });
-        scene.speed_regions.retain(|region| {
-            belongs(region.clip_index, region.start_sec, region.end_sec)
-        });
-        scene.camera_fullscreen_regions.retain(|region| {
-            belongs(region.clip_index, region.start_sec, region.end_sec)
-        });
+        scene
+            .zoom_regions
+            .retain(|region| belongs(region.clip_index, region.start_sec, region.end_sec));
+        scene
+            .speed_regions
+            .retain(|region| belongs(region.clip_index, region.start_sec, region.end_sec));
+        scene
+            .camera_fullscreen_regions
+            .retain(|region| belongs(region.clip_index, region.start_sec, region.end_sec));
         scene.annotations.retain(|annotation| {
-            belongs(annotation.clip_index, annotation.start_sec, annotation.end_sec)
+            belongs(
+                annotation.clip_index,
+                annotation.start_sec,
+                annotation.end_sec,
+            )
         });
         // Le layout dépend de la FORME de la source du clip (dimensions natives × crop), qui
         // varie d'un clip à l'autre. On installe donc celui du clip composé dans les champs
@@ -575,7 +647,10 @@ mod tests {
         assert!(scene.layout.webcam_mirror);
         assert!((scene.effects.roundness_frac - 0.0222).abs() < 1e-6);
         match scene.background {
-            SceneBackground::Gradient { angle_deg, ref stops } => {
+            SceneBackground::Gradient {
+                angle_deg,
+                ref stops,
+            } => {
                 assert_eq!(angle_deg, 135.0);
                 assert_eq!(stops.len(), 2);
             }
@@ -651,12 +726,18 @@ mod tests {
                 r##"{{"clips":[],"layout":{{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0}},"background":{{"kind":"color","color":"#000000"}},"zoomRegions":[],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":null}},"webcamEffect":{}}}"##,
                 effect
             );
-            Scene::from_json(&json).expect("parse avec webcamEffect").webcam_effect.expect("présent")
+            Scene::from_json(&json)
+                .expect("parse avec webcamEffect")
+                .webcam_effect
+                .expect("présent")
         };
 
         assert_eq!(scene_with(r#"{"mode":"none"}"#).shader_code(), 0.0);
         assert_eq!(scene_with(r#"{"mode":"transparent"}"#).shader_code(), 1.0);
-        assert_eq!(scene_with(r#"{"mode":"blur","blurIntensity":0.75}"#).shader_code(), 2.0);
+        assert_eq!(
+            scene_with(r#"{"mode":"blur","blurIntensity":0.75}"#).shader_code(),
+            2.0
+        );
         assert_eq!(scene_with(r#"{"mode":"custom"}"#).shader_code(), 3.0);
         // Un mode inconnu (document trafiqué, schéma futur) ne doit pas allumer un effet.
         assert_eq!(scene_with(r#"{"mode":"hologram"}"#).shader_code(), 0.0);
@@ -745,7 +826,10 @@ mod annotation_tests {
         assert_eq!(ann.space.as_deref(), Some("frame"));
         assert_eq!(ann.anchor_rect(PADDED_SCREEN), [0.0, 0.0, 1.0, 1.0]);
         // Et il tombe au même endroit quel que soit le rect écran.
-        assert_eq!(ann.anchor_rect([0.3, 0.3, 0.4, 0.4]), ann.anchor_rect(PADDED_SCREEN));
+        assert_eq!(
+            ann.anchor_rect([0.3, 0.3, 0.4, 0.4]),
+            ann.anchor_rect(PADDED_SCREEN)
+        );
     }
 
     #[test]
@@ -768,7 +852,10 @@ mod annotation_tests {
                  {"id":"b","startSec":0.0,"endSec":1.0,"kind":"blur","x":0.0,"y":0.0,"w":0.5,"h":0.5,"zIndex":1,"blur":{"style":"mosaic","shape":"freehand","color":"black","intensity":8,"blockSize":16,"freehandPoints":[{"x":0.1,"y":0.2},{"x":0.3,"y":0.4}]}}]"##,
         );
         let scene = Scene::from_json(&json).expect("parse figure+blur");
-        let figure = scene.annotations[0].figure.as_ref().expect("payload figure");
+        let figure = scene.annotations[0]
+            .figure
+            .as_ref()
+            .expect("payload figure");
         assert_eq!(figure.direction, "up-left");
         assert!((figure.stroke_width - 6.0).abs() < 1e-6);
         let blur = scene.annotations[1].blur.as_ref().expect("payload blur");
@@ -789,7 +876,11 @@ mod annotation_tests {
         let scene = Scene::from_json(&json).expect("parse");
         let filtered = scene.for_clip_window(0, 0.0, 10.0);
         assert_eq!(
-            filtered.annotations.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            filtered
+                .annotations
+                .iter()
+                .map(|a| a.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["keep"]
         );
     }

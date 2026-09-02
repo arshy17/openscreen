@@ -153,6 +153,36 @@ function getActiveRegion(
 	viewportRatio?: ViewportRatio,
 	playbackRate = 1,
 ) {
+	// The preview's normal path does not connect neighbouring zooms. Keep that hot path
+	// allocation-free: the old map → filter → sort pipeline created hundreds of short-lived
+	// objects on every animation frame in a long auto-zoomed recording, which showed up as
+	// continuous editor stutter and GC pauses.
+	if (connectedPairs.length === 0) {
+		let best: { region: ZoomRegion; strength: number } | null = null;
+		for (const region of regions) {
+			const strength = computeRegionStrength(region, timeMs, playbackRate);
+			if (
+				strength > 0 &&
+				(!best ||
+					strength > best.strength ||
+					(strength === best.strength && region.startMs > best.region.startMs))
+			) {
+				best = { region, strength };
+			}
+		}
+		if (!best) return null;
+		const activeScale = getZoomScale(best.region);
+		return {
+			region: {
+				...best.region,
+				focus: getResolvedFocus(best.region, activeScale, timeMs, cursorTelemetry, viewportRatio),
+			},
+			strength: best.strength,
+			blendedScale: null,
+			rotation3D: getRotation3D(best.region),
+		};
+	}
+
 	const activeRegions = regions
 		.map((region) => {
 			const outgoingPair = connectedPairs.find((pair) => pair.currentRegion.id === region.id);

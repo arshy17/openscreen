@@ -48,25 +48,18 @@ function toLegacyZoomRegion(region: AxcutZoomRegion): LegacyZoomRegion {
 	};
 }
 
-/**
- * Resolves the zoom transform to apply to the preview at a given point on
- * the virtual (edited) timeline. `virtualTimeMs` must be in the same
- * coordinate space as `zoomRegion.startMs`/`endMs` (the timeline shown in
- * the ruler, not raw source-media time).
- *
- * `playbackRate` scales the zoom-in/out transition windows in source-time
- * so the transition keeps its authored wall-clock duration inside speed
- * regions. Defaults to 1 (no scaling).
- */
-export function computeZoomPreviewTransform(
-	zoomRegions: AxcutZoomRegion[],
+/** Convert immutable document rows once per edit, not once per playback frame. */
+export function prepareZoomPreviewRegions(zoomRegions: AxcutZoomRegion[]): LegacyZoomRegion[] {
+	return zoomRegions.map(toLegacyZoomRegion);
+}
+
+export function computePreparedZoomPreviewTransform(
+	legacyRegions: LegacyZoomRegion[],
 	virtualTimeMs: number,
 	cursorTelemetry?: CursorTelemetryPoint[],
 	playbackRate = 1,
 ): ZoomPreviewTransform {
-	if (zoomRegions.length === 0) return IDENTITY_ZOOM_TRANSFORM;
-
-	const legacyRegions = zoomRegions.map(toLegacyZoomRegion);
+	if (legacyRegions.length === 0) return IDENTITY_ZOOM_TRANSFORM;
 	const dominant = findDominantRegion(legacyRegions, virtualTimeMs, {
 		cursorTelemetry,
 		playbackRate,
@@ -88,4 +81,28 @@ export function computeZoomPreviewTransform(
 		translateXPercent: transform.x * 100,
 		translateYPercent: transform.y * 100,
 	};
+}
+
+/**
+ * Resolves the zoom transform to apply to the preview at a given point on
+ * the virtual (edited) timeline. `virtualTimeMs` must be in the same
+ * coordinate space as `zoomRegion.startMs`/`endMs` (the timeline shown in
+ * the ruler, not raw source-media time).
+ *
+ * `playbackRate` scales the zoom-in/out transition windows in source-time
+ * so the transition keeps its authored wall-clock duration inside speed
+ * regions. Defaults to 1 (no scaling).
+ */
+export function computeZoomPreviewTransform(
+	zoomRegions: AxcutZoomRegion[],
+	virtualTimeMs: number,
+	cursorTelemetry?: CursorTelemetryPoint[],
+	playbackRate = 1,
+): ZoomPreviewTransform {
+	return computePreparedZoomPreviewTransform(
+		prepareZoomPreviewRegions(zoomRegions),
+		virtualTimeMs,
+		cursorTelemetry,
+		playbackRate,
+	);
 }

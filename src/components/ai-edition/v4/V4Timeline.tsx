@@ -30,8 +30,8 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
 import {
 	applyCreatorTheme,
-	buildCreatorEditPrompt,
 	CREATOR_THEMES,
+	type CreatorTheme,
 	type CreatorThemeId,
 	getCreatorTheme,
 } from "@/lib/ai-edition/creatorEdit";
@@ -41,7 +41,6 @@ import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
-import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
@@ -64,24 +63,8 @@ import {
 import { nativeBridgeClient } from "@/native/client";
 import { TransportBar } from "../TransportBar";
 import type { VideoSource } from "../VirtualPreview";
+import { CreatorToolkitDialog } from "./CreatorToolkitDialog";
 import styles from "./EditorShellV4.module.css";
-
-// The AI option's prompt — sent straight to the chat agent via the prompt-bus.
-//
-// ponytail: cuts ONLY, deliberately. It used to ask for zooms too ("smart
-// zoom-ins on the moments where the cursor dwells… focused on the cursor's
-// location"), and the model has no way to do that well: measured on a real 66s
-// screencast, every trim it emitted landed strictly inside a true silence with a
-// 0.06–0.33s margin and destroyed zero speech, while 7 of its 9 zoom focus points
-// missed the actual cursor position in their own window — three of them by more
-// than a third of the frame. It places zooms from what the transcript SAYS, not
-// from where the pointer WAS. Asking for both in one breath bought misaimed zooms
-// at the price of the cuts' credibility, and the cursor-driven wand next to it
-// already does the zoom pass from the same telemetry, deterministically.
-// Re-widen this when the model can be shown to read the track; the workbench
-// scenario `real-wizard-enhance` is what would show it.
-const AI_ENHANCE_PROMPT =
-	"Cut the dead time in this recording: long pauses, silences, and idle stretches where nothing is being said or done. Keep the pacing tight and natural, and do not cut anything a viewer needs. Apply the edits directly to the timeline.";
 
 type TimelineApi = ReturnType<typeof useTimeline>;
 
@@ -133,6 +116,11 @@ const PILL_HANDLE_OUT_PX = PILL_HANDLE_PX + PILL_MOVE_GAP_PX;
  *  overflow — the lane's colour already says which kind it is, and the title
  *  attribute still gives the value on hover. */
 const PILL_CONTENT_MIN_PX = 34;
+/** Above this count the lane becomes one density summary until the user zooms in.
+ * Hundreds of interactive pills each carry three pointer handlers and two resize handles;
+ * mounting all of them on a long recording made playback and every inspector edit compete
+ * with thousands of unnecessary DOM nodes. */
+export const MAX_VISIBLE_INTERACTIVE_PILLS = 120;
 /** Edge-snap radius while dragging a pill, in screen px. */
 const PILL_SNAP_PX = 8;
 // The size a newly created pill aims for (PILL_CREATE_PX) lives in
@@ -353,6 +341,108 @@ interface LanePill {
 	sourceIds: string[];
 }
 
+/**
+ * The editor top bar is also Electron's hidden-inset macOS titlebar. A tall
+ * popover opened from the timeline is flipped upward by Radix; without this
+ * boundary padding Radix may shift it all the way to y=0, underneath the
+ * traffic lights and the rest of the application chrome.
+ *
+ * Keep the same workspace-safe inset on Windows/Linux too: those platforms do
+ * not have traffic lights, but covering the mode switch and Export control is
+ * equally disruptive.
+ */
+export const AUTO_ENHANCE_COLLISION_PADDING = {
+	top: 70,
+	right: 12,
+	bottom: 12,
+	left: 12,
+} as const;
+
+export const AUTO_ENHANCE_POPOVER_STYLE = {
+	width: "min(540px, calc(100vw - 24px))",
+	maxHeight: "min(680px, var(--radix-popover-content-available-height, calc(100vh - 82px)))",
+} as const;
+
+export function pillsInVisibleWindow(
+	pills: LanePill[],
+	startSec: number,
+	endSec: number,
+): { visible: LanePill[]; summarized: boolean } {
+	const visible = pills.filter((pill) => pill.end >= startSec && pill.start <= endSec);
+	return {
+		visible: visible.length > MAX_VISIBLE_INTERACTIVE_PILLS ? [] : visible,
+		summarized: visible.length > MAX_VISIBLE_INTERACTIVE_PILLS,
+	};
+}
+
+function CreatorThemePreview({ theme }: { theme: CreatorTheme }) {
+	const portrait = theme.aspectRatio === "9:16";
+	const safe = theme.safeArea;
+	return (
+		<div className={styles.creatorThemePreview} style={{ background: theme.preview.background }}>
+			<div
+				className={`${styles.creatorThemeCanvas}${portrait ? ` ${styles.portrait}` : ""}`}
+				style={{ aspectRatio: theme.aspectRatio.replace(":", " / ") }}
+			>
+				<div
+					className={`${styles.creatorThemeScreen}${
+						theme.preview.layout === "split"
+							? ` ${styles.creatorThemeScreenSplit}`
+							: theme.preview.layout === "camera"
+								? ` ${styles.creatorThemeScreenCamera}`
+								: ""
+					}`}
+					style={{ borderColor: theme.preview.accent }}
+				/>
+				{theme.preview.camera !== "none" ? (
+					<div
+						className={`${styles.creatorThemeCamera} ${
+							theme.preview.camera === "circle"
+								? styles.creatorThemeCameraCircle
+								: styles.creatorThemeCameraRounded
+						}`}
+						style={{ boxShadow: `0 0 0 2px ${theme.preview.accent}` }}
+					/>
+				) : null}
+				<div
+					className={`${styles.creatorThemeCaption}${
+						theme.preview.caption === "bold"
+							? ` ${styles.creatorThemeCaptionBold}`
+							: theme.preview.caption === "minimal"
+								? ` ${styles.creatorThemeCaptionMinimal}`
+								: ""
+					}`}
+					style={{
+						background: theme.preview.caption === "minimal" ? theme.preview.accent : undefined,
+					}}
+				>
+					<span />
+					<span />
+				</div>
+				<div
+					className={styles.creatorThemeSafeArea}
+					style={{
+						top: `${safe.top}%`,
+						right: `${safe.right}%`,
+						bottom: `${safe.bottom}%`,
+						left: `${safe.left}%`,
+						borderColor: theme.preview.accent,
+					}}
+				/>
+				{portrait ? (
+					<>
+						<div className={styles.creatorThemePlatformRail} style={{ width: `${safe.right}%` }} />
+						<div
+							className={styles.creatorThemePlatformFooter}
+							style={{ height: `${safe.bottom}%` }}
+						/>
+					</>
+				) : null}
+			</div>
+		</div>
+	);
+}
+
 export function V4Timeline({
 	tl,
 	setCurrentTime,
@@ -421,6 +511,7 @@ export function V4Timeline({
 
 	const [autoEnhanceOpen, setAutoEnhanceOpen] = useState(false);
 	const [autoBusy, setAutoBusy] = useState(false);
+	const [creatorToolkitOpen, setCreatorToolkitOpen] = useState(false);
 	const [creatorThemeId, setCreatorThemeId] = useState<CreatorThemeId>("social-punch");
 	const creatorTheme = useMemo(() => getCreatorTheme(creatorThemeId), [creatorThemeId]);
 	// The AI cut pass reads the transcript, and the transcript is produced in the
@@ -1091,13 +1182,11 @@ export function V4Timeline({
 		}
 	}, [videoSources, clips, tl, t]);
 
-	// Auto-enhance option 2 — hand a generic prompt to the AI agent (smart
-	// zooms + cuts) via the chat prompt-bus. The chat panel owns the outcome
-	// toast: submitting is not the same as being accepted (no usable provider
-	// bounces the prompt), and only the consumer knows which happened.
+	// Every automatic cut path enters the same review-first surface. The model is
+	// not called until the user explicitly enables AI refinement and applies.
 	const runAiEnhance = useCallback(() => {
 		setAutoEnhanceOpen(false);
-		useChatPromptBus.getState().submit(AI_ENHANCE_PROMPT);
+		setCreatorToolkitOpen(true);
 	}, []);
 
 	// The deterministic half of a creator edit: frame, composition, caption style,
@@ -1130,14 +1219,13 @@ export function V4Timeline({
 		}
 	}, [creatorTheme, creatorThemeId, t]);
 
-	// The complete pass uses whichever provider is selected in AI Settings. This
-	// includes a local OpenAI-compatible endpoint such as the user's Qwen model.
+	// Creator Edit is review-first. Opening the toolkit computes a local plan but
+	// does not mutate the project; style, visuals, each safe cut and the optional
+	// model refinement are selected explicitly inside the dialog.
 	const runAiCreatorEdit = useCallback(() => {
 		setAutoEnhanceOpen(false);
-		useChatPromptBus
-			.getState()
-			.submit(buildCreatorEditPrompt(creatorThemeId), "toolbar.creatorEditRequested");
-	}, [creatorThemeId]);
+		setCreatorToolkitOpen(true);
+	}, []);
 
 	const isPillSelected = (id: string) =>
 		tl.selection?.id === id || tl.multiSelection.some((m) => m.id === id);
@@ -1234,7 +1322,8 @@ export function V4Timeline({
 	};
 
 	const renderPills = (pills: LanePill[], emptyLabel: string) => {
-		const effectivePills = pills.map((p) => {
+		const windowed = pillsInVisibleWindow(pills, nav.start * total, nav.end * total);
+		const effectivePills = windowed.visible.map((p) => {
 			if (activePillDrag && activePillDrag.id === p.id) {
 				return { ...p, start: activePillDrag.start, end: activePillDrag.end };
 			}
@@ -1242,15 +1331,25 @@ export function V4Timeline({
 		});
 		return (
 			<>
+				{windowed.summarized ? (
+					<span
+						className={styles.laneEmpty}
+						style={{ left: `${nav.start * 100}%`, width: `${navSpan * 100}%` }}
+						title={t("hints.denseRegionsHint")}
+					>
+						{t("hints.denseRegions", { count: pills.length })}
+					</span>
+				) : null}
 				{effectivePills.length === 0 ? (
 					// The lane is as wide as the ZOOMED canvas, so centring the hint on it
 					// would slide it off-screen as soon as the timeline is zoomed in. Span
 					// the visible window instead, and the hint stays centred in view.
 					<span
 						className={styles.laneEmpty}
+						aria-hidden={windowed.summarized}
 						style={{ left: `${nav.start * 100}%`, width: `${navSpan * 100}%` }}
 					>
-						{emptyLabel}
+						{windowed.summarized ? "" : emptyLabel}
 					</span>
 				) : null}
 				{effectivePills.flatMap((p) => {
@@ -1334,15 +1433,16 @@ export function V4Timeline({
 								</button>
 							</PopoverTrigger>
 							<PopoverContent
+								side="top"
 								align="start"
-								sideOffset={6}
+								sideOffset={8}
+								collisionPadding={AUTO_ENHANCE_COLLISION_PADDING}
 								animated={false}
-								className="w-auto border-0 bg-transparent p-0 shadow-none"
+								aria-label={t("toolbar.autoEnhance")}
+								className={styles.autoEnhancePopover}
+								style={AUTO_ENHANCE_POPOVER_STYLE}
 							>
-								<div
-									className={styles.recMenu}
-									style={{ position: "relative", bottom: "auto", width: 310 }}
-								>
+								<div className={`${styles.recMenu} ${styles.autoEnhanceMenu}`}>
 									<div
 										style={{
 											padding: "10px 10px 8px",
@@ -1352,14 +1452,7 @@ export function V4Timeline({
 										<div style={{ fontSize: 11, fontWeight: 700, color: "var(--fg-2)" }}>
 											{t("toolbar.creatorTheme")}
 										</div>
-										<div
-											style={{
-												display: "grid",
-												gridTemplateColumns: "1fr 1fr",
-												gap: 6,
-												marginTop: 7,
-											}}
-										>
+										<div className={styles.creatorThemeGrid}>
 											{CREATOR_THEMES.map((theme) => {
 												const selected = theme.id === creatorThemeId;
 												return (
@@ -1369,34 +1462,27 @@ export function V4Timeline({
 														onClick={() => setCreatorThemeId(theme.id)}
 														aria-pressed={selected}
 														title={theme.description}
-														style={{
-															border: `1px solid ${selected ? "var(--accent)" : "var(--border)"}`,
-															borderRadius: 8,
-															background: selected
-																? "color-mix(in srgb, var(--accent) 14%, var(--surface))"
-																: "var(--surface)",
-															color: "var(--fg)",
-															padding: "7px 8px",
-															fontSize: 11,
-															fontWeight: selected ? 700 : 600,
-															textAlign: "left",
-															cursor: "pointer",
-														}}
+														className={styles.creatorThemeCard}
 													>
-														{theme.label}
+														<CreatorThemePreview theme={theme} />
+														<span className={styles.creatorThemeMeta}>
+															<strong>{theme.label}</strong>
+															<small>
+																{theme.platform} · {theme.aspectRatio}
+															</small>
+														</span>
 													</button>
 												);
 											})}
 										</div>
-										<div
-											style={{
-												marginTop: 6,
-												fontSize: 10,
-												lineHeight: 1.35,
-												color: "var(--muted)",
-											}}
-										>
-											{creatorTheme.description}
+										<div className={styles.creatorThemeSelection}>
+											<strong>{creatorTheme.platform}</strong>
+											<span>
+												{creatorTheme.exportSize.width} × {creatorTheme.exportSize.height} · safe
+												margins T{creatorTheme.safeArea.top}% R{creatorTheme.safeArea.right}% B
+												{creatorTheme.safeArea.bottom}% L{creatorTheme.safeArea.left}%
+											</span>
+											<small>{creatorTheme.description}</small>
 										</div>
 									</div>
 									<button
@@ -1412,25 +1498,12 @@ export function V4Timeline({
 											</span>
 										</span>
 									</button>
-									<button
-										type="button"
-										className={styles.recMenuRow}
-										onClick={runAiCreatorEdit}
-										disabled={smartCutsBlocked}
-										title={transcriptGate.reason === "failed" ? transcriptGate.message : undefined}
-										style={smartCutsBlocked ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
-									>
-										{transcriptGate.state === "pending" ? (
-											<Loader2 size={15} className="animate-spin" style={{ flexShrink: 0 }} />
-										) : (
-											<Sparkles size={15} style={{ flexShrink: 0 }} />
-										)}
+									<button type="button" className={styles.recMenuRow} onClick={runAiCreatorEdit}>
+										<Sparkles size={15} style={{ flexShrink: 0 }} />
 										<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
 											<span style={{ fontWeight: 600 }}>{t("toolbar.creatorEdit")}</span>
 											<span style={{ fontSize: 11, color: "var(--muted)" }}>
-												{transcriptGate.state === "ready"
-													? t("toolbar.creatorEditHint")
-													: smartCutsHint}
+												Review plan, templates, clips, variants, layouts, privacy and audio
 											</span>
 										</span>
 									</button>
@@ -1791,6 +1864,11 @@ export function V4Timeline({
 					</div>
 				</div>
 			) : null}
+			<CreatorToolkitDialog
+				open={creatorToolkitOpen}
+				onClose={() => setCreatorToolkitOpen(false)}
+				initialThemeId={creatorThemeId}
+			/>
 		</div>
 	);
 }

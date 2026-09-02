@@ -133,6 +133,37 @@ export function removeCaptionTranslation(doc: AxcutDocument, language: string): 
 }
 
 /**
+ * Drop every translated caption for one asset while preserving translations for
+ * the rest of the project. A correction to the source transcript makes only
+ * this asset's translated text stale; leaving it in place would make the
+ * caption preview appear not to react when a translated language is selected.
+ */
+export function removeCaptionTranslationsForAsset(
+	doc: AxcutDocument,
+	assetId: string,
+): AxcutDocument {
+	const existing = getCaptionTranslations(doc);
+	let changed = false;
+	const next = Object.fromEntries(
+		Object.entries(existing).map(([language, translation]) => {
+			if (!(assetId in translation.byAsset)) return [language, translation];
+			changed = true;
+			const { [assetId]: _stale, ...byAsset } = translation.byAsset;
+			return [language, { ...translation, byAsset }];
+		}),
+	) as CaptionTranslations;
+
+	if (!changed) return doc;
+	return {
+		...doc,
+		legacyEditor: {
+			...(legacyBlob(doc) ?? {}),
+			captionTranslations: next,
+		} as Record<string, unknown>,
+	};
+}
+
+/**
  * The unit of translation: a run of consecutive transcript segments that reads
  * as one phrase.
  *

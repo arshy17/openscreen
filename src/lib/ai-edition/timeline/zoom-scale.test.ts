@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { getZoomScale, ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import {
+	DEFAULT_ZOOM_DEPTH,
 	effectiveZoomScale,
 	MAX_ZOOM_SCALE,
 	MIN_ZOOM_SCALE,
@@ -13,6 +14,11 @@ import {
 } from "./zoom-scale";
 
 describe("effectiveZoomScale", () => {
+	it("defaults new zooms to 1.50×", () => {
+		expect(DEFAULT_ZOOM_DEPTH).toBe(2);
+		expect(effectiveZoomScale({ depth: DEFAULT_ZOOM_DEPTH })).toBe(1.5);
+	});
+
 	it("maps each depth to the table, which is not depth/2 + 0.5", () => {
 		expect(effectiveZoomScale({ depth: 1 })).toBe(1.25);
 		expect(effectiveZoomScale({ depth: 3 })).toBe(2.0);

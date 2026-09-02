@@ -138,8 +138,9 @@ export function useNativeCompositorView(
 				return;
 			}
 			// `getBoundingClientRect` on the canvas reflects its CSS layout box;
-			// kept at CSS-pixel density for the native offscreen target. Export has
-			// its own full-resolution target and is unaffected.
+			// `computePreviewRect` expands it to device pixels (up to its bounded
+			// ceiling) so Retina displays do not stretch a low-density frame. Export
+			// has its own full-resolution target and is unaffected.
 			const domRect = canvas.getBoundingClientRect();
 			const next = computePreviewRect(domRect, window.devicePixelRatio);
 			// `x` / `y` are vestigial in the new contract (ignored native-side),

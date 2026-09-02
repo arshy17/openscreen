@@ -15,7 +15,13 @@ vi.mock("@/contexts/I18nContext", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
-import { V4Timeline } from "./V4Timeline";
+import {
+	AUTO_ENHANCE_COLLISION_PADDING,
+	AUTO_ENHANCE_POPOVER_STYLE,
+	MAX_VISIBLE_INTERACTIVE_PILLS,
+	pillsInVisibleWindow,
+	V4Timeline,
+} from "./V4Timeline";
 
 beforeAll(() => {
 	globalThis.ResizeObserver = class {
@@ -135,6 +141,19 @@ function zoomIn(notches: number) {
 }
 
 describe("V4Timeline lane pills", () => {
+	it("collapses a dense visible lane instead of mounting hundreds of controls", () => {
+		const many = Array.from({ length: MAX_VISIBLE_INTERACTIVE_PILLS + 1 }, (_, index) => ({
+			id: `z${index}`,
+			kind: "zoom" as const,
+			start: index,
+			end: index + 0.5,
+			label: "2×",
+			sourceIds: [`z${index}`],
+		}));
+		expect(pillsInVisibleWindow(many, 0, 1_000)).toEqual({ visible: [], summarized: true });
+		expect(pillsInVisibleWindow(many, 0, 10)).toMatchObject({ summarized: false });
+	});
+
 	it("draws a pill exactly as wide as its region, at any zoom", () => {
 		// 1 s of 1800 s. The old `Math.max(1.5, …)` floor drew this as 1.5% — 27
 		// seconds of ruler for a one-second annotation — and did it at every zoom,
@@ -195,6 +214,25 @@ describe("V4Timeline lane pills", () => {
 });
 
 describe("V4Timeline create-from-toolbar", () => {
+	it("keeps the Auto-enhance menu inside the editor workspace", () => {
+		renderTimeline();
+		fireEvent.click(screen.getByTitle("toolbar.autoEnhance"));
+
+		const menu = screen.getByRole("dialog", { name: "toolbar.autoEnhance" });
+		expect(menu.className).toContain("autoEnhancePopover");
+		expect(screen.getByRole("button", { name: /toolbar\.smartZoomsAndCuts/ })).toBeInTheDocument();
+		expect(AUTO_ENHANCE_POPOVER_STYLE).toEqual({
+			width: "min(540px, calc(100vw - 24px))",
+			maxHeight: "min(680px, var(--radix-popover-content-available-height, calc(100vh - 82px)))",
+		});
+		expect(AUTO_ENHANCE_COLLISION_PADDING).toEqual({
+			top: 70,
+			right: 12,
+			bottom: 12,
+			left: 12,
+		});
+	});
+
 	// The button asks for a DURATION worth a fixed number of pixels at the current
 	// zoom, so the pill you get is always the same size on screen — which is what
 	// the flat 2 s could not do: on this 30-minute fixture zoomed out it is one
@@ -245,7 +283,7 @@ describe("V4Timeline create-from-toolbar", () => {
 	it("never asks for a slice too short to be worth creating", () => {
 		// Past ~30x on a short timeline the pixels are worth hundredths of a
 		// second; the region would be born unusable, so the duration floors.
-		const { tl } = renderTimeline([clip(0, 3)]);
+		const { tl } = renderTimeline([clip(0, 3)], { id: "ann-short", startMs: 1_000, endMs: 2_000 });
 		zoomIn(40);
 		fireEvent.click(screen.getByTitle("buttons.addZoom"));
 		expect(durationOf(tl)).toBeCloseTo(0.25, 3);

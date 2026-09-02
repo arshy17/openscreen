@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import {
 	type CropRegion,
 	DEFAULT_CROP_REGION,
@@ -21,8 +22,9 @@ import {
 	totalVirtualDuration,
 } from "@/lib/ai-edition/timeline/virtual-preview";
 import {
-	computeZoomPreviewTransform,
+	computePreparedZoomPreviewTransform,
 	IDENTITY_ZOOM_TRANSFORM,
+	prepareZoomPreviewRegions,
 } from "@/lib/ai-edition/timeline/zoom-preview";
 import {
 	describeMediaError,
@@ -68,32 +70,74 @@ export function resolveAudioTrackPlayback(
 export interface PreviewAudioGraph {
 	context: AudioContext;
 	gain: GainNode;
+	musicGain: GainNode;
 }
 
 /**
- * The preview's ONLY audio processing is the output trim, and that is deliberate: it is
- * the same `10 ** (dB / 20)` scalar `finish_audio` applies natively, so what the editor
- * plays is what the export writes.
- *
- * Nothing with state belongs here. The export runs on the assembled timeline (trimmed,
- * speed-adjusted, concatenated); the preview runs on the untouched source file, seeked.
- * A filter or a compressor would see a different signal on each side and drift — and an
- * offline stage measured over the whole programme (a loudness normaliser) cannot exist
- * here at all, because the preview never holds that programme.
+ * Master and soundtrack gain are the exact scalars the exporter uses. Optional voice
+ * enhancement is wired separately in the graph setup below; this helper remains only the
+ * stable level boundary shared with export.
  */
 export function applyPreviewAudioSettings(
 	graph: PreviewAudioGraph | null,
 	elements: Array<HTMLAudioElement | null>,
 	gainDb: number,
+	musicElement: HTMLAudioElement | null = null,
+	musicGainDb = 0,
 ): void {
 	const outputGain = audioGainScalar(gainDb);
 	if (!graph) {
 		for (const element of elements) {
 			if (element) element.volume = Math.min(1, outputGain);
 		}
+		if (musicElement) musicElement.volume = Math.min(1, outputGain * audioGainScalar(musicGainDb));
 		return;
 	}
 	graph.gain.gain.value = outputGain;
+	graph.musicGain.gain.value = audioGainScalar(musicGainDb);
+}
+
+export function backgroundMusicEnvelope(
+	timeSec: number,
+	durationSec: number,
+	fadeInSec: number,
+	fadeOutSec: number,
+): number {
+	const at = Math.max(0, timeSec);
+	const total = Math.max(0, durationSec);
+	const fadeIn = fadeInSec > 0 ? Math.min(1, at / fadeInSec) : 1;
+	const remaining = Math.max(0, total - at);
+	const fadeOut = fadeOutSec > 0 ? Math.min(1, remaining / fadeOutSec) : 1;
+	return Math.max(0, Math.min(fadeIn, fadeOut));
+}
+
+export function previewEnhancementParameters(
+	preset: "clarity" | "podcast" | "broadcast",
+	intensityValue: number,
+): { cutoffHz: number; thresholdDb: number; ratio: number; makeupDb: number } {
+	const intensity = Math.min(1, Math.max(0, intensityValue));
+	if (preset === "podcast") {
+		return {
+			cutoffHz: 65 + 35 * intensity,
+			thresholdDb: -17 - 5 * intensity,
+			ratio: 1 + 3.2 * intensity,
+			makeupDb: 2 * intensity,
+		};
+	}
+	if (preset === "broadcast") {
+		return {
+			cutoffHz: 80 + 45 * intensity,
+			thresholdDb: -20 - 5 * intensity,
+			ratio: 1 + 4.5 * intensity,
+			makeupDb: 2.8 * intensity,
+		};
+	}
+	return {
+		cutoffHz: 55 + 45 * intensity,
+		thresholdDb: -14 - 4 * intensity,
+		ratio: 1 + 2 * intensity,
+		makeupDb: 1.2 * intensity,
+	};
 }
 
 /** First clip (by timeline order) starting strictly after `afterTimelineStartSec` —
@@ -195,14 +239,20 @@ export function VirtualPreview({
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const primaryAudioRef = useRef<HTMLAudioElement | null>(null);
 	const supplementalAudioRef = useRef<HTMLAudioElement | null>(null);
+	const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
 	const [primaryAudioEl, setPrimaryAudioEl] = useState<HTMLAudioElement | null>(null);
 	const [supplementalAudioEl, setSupplementalAudioEl] = useState<HTMLAudioElement | null>(null);
+	const [backgroundMusicEl, setBackgroundMusicEl] = useState<HTMLAudioElement | null>(null);
 	const [supplementalAudioSrc, setSupplementalAudioSrc] = useState<string | null>(null);
 	const [audioProbeComplete, setAudioProbeComplete] = useState(false);
 	const audioGainDbRef = useRef(settings.audioGainDb);
+	const backgroundMusicGainDbRef = useRef(settings.backgroundMusicGainDb);
 	useEffect(() => {
 		audioGainDbRef.current = settings.audioGainDb;
 	}, [settings.audioGainDb]);
+	useEffect(() => {
+		backgroundMusicGainDbRef.current = settings.backgroundMusicGainDb;
+	}, [settings.backgroundMusicGainDb]);
 	const audioContextRef = useRef<AudioContext | null>(null);
 	const audioContextCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const audioSourceNodesRef = useRef(new WeakMap<HTMLAudioElement, MediaElementAudioSourceNode>());
@@ -243,6 +293,7 @@ export function VirtualPreview({
 	const [sourceIndex, setSourceIndex] = useState(0);
 
 	const virtualDurationSec = useMemo(() => totalVirtualDuration(clips), [clips]);
+	const preparedZoomRegions = useMemo(() => prepareZoomPreviewRegions(zoomRegions), [zoomRegions]);
 	const activeSource = videoSources[sourceIndex] ?? null;
 
 	useEffect(() => {
@@ -291,8 +342,10 @@ export function VirtualPreview({
 					audioSourceNodesRef.current = new WeakMap();
 				}
 				const gain = context.createGain();
+				const musicGain = context.createGain();
 				gain.connect(context.destination);
-				return { context, gain };
+				musicGain.connect(gain);
+				return { context, gain, musicGain };
 			} catch {
 				return null;
 			}
@@ -300,12 +353,47 @@ export function VirtualPreview({
 		if (!graph) {
 			// WebAudio can be unavailable in unit tests or under a denied audio policy. No source
 			// node was created, so `volume` still reaches the output — capped at 0 dB.
-			applyPreviewAudioSettings(null, elements, audioGainDbRef.current);
+			applyPreviewAudioSettings(
+				null,
+				elements,
+				audioGainDbRef.current,
+				backgroundMusicEl,
+				backgroundMusicGainDbRef.current,
+			);
 			return;
 		}
 
 		const connectedSources: MediaElementAudioSourceNode[] = [];
-		for (const element of elements) {
+		const programmeInput = graph.context.createGain();
+		const enhancementNodes: AudioNode[] = [programmeInput];
+		if (settings.audioEnhancementEnabled && settings.audioEnhancementIntensity > 0) {
+			const params = previewEnhancementParameters(
+				settings.audioEnhancementPreset,
+				settings.audioEnhancementIntensity,
+			);
+			const highPass = graph.context.createBiquadFilter();
+			highPass.type = "highpass";
+			highPass.frequency.value = params.cutoffHz;
+			highPass.Q.value = 0.707;
+			const compressor = graph.context.createDynamicsCompressor();
+			compressor.threshold.value = params.thresholdDb;
+			compressor.knee.value = 18;
+			compressor.ratio.value = params.ratio;
+			compressor.attack.value = 0.008;
+			compressor.release.value = 0.14;
+			const makeup = graph.context.createGain();
+			makeup.gain.value = audioGainScalar(params.makeupDb);
+			programmeInput.connect(highPass);
+			highPass.connect(compressor);
+			compressor.connect(makeup);
+			makeup.connect(graph.gain);
+			enhancementNodes.push(highPass, compressor, makeup);
+		} else {
+			programmeInput.connect(graph.gain);
+		}
+		for (const element of [...elements, backgroundMusicEl].filter(
+			(value): value is HTMLAudioElement => Boolean(value),
+		)) {
 			try {
 				let source = audioSourceNodesRef.current.get(element);
 				if (!source) {
@@ -313,7 +401,7 @@ export function VirtualPreview({
 					audioSourceNodesRef.current.set(element, source);
 				}
 				source.disconnect();
-				source.connect(graph.gain);
+				source.connect(element === backgroundMusicEl ? graph.musicGain : programmeInput);
 				connectedSources.push(source);
 			} catch {
 				// Routing THIS element failed; leave the others alone. Once
@@ -323,13 +411,30 @@ export function VirtualPreview({
 			}
 		}
 		audioGraphRef.current = graph;
-		applyPreviewAudioSettings(graph, elements, audioGainDbRef.current);
+		applyPreviewAudioSettings(
+			graph,
+			elements,
+			audioGainDbRef.current,
+			backgroundMusicEl,
+			backgroundMusicGainDbRef.current,
+		);
 		return () => {
 			audioGraphRef.current = null;
 			for (const source of connectedSources) source.disconnect();
+			graph.musicGain.disconnect();
 			graph.gain.disconnect();
+			for (const node of enhancementNodes) node.disconnect();
 		};
-	}, [primaryAudioEl, supplementalAudioEl, supplementalAudioSrc, audioProbeComplete]);
+	}, [
+		primaryAudioEl,
+		supplementalAudioEl,
+		supplementalAudioSrc,
+		backgroundMusicEl,
+		audioProbeComplete,
+		settings.audioEnhancementEnabled,
+		settings.audioEnhancementIntensity,
+		settings.audioEnhancementPreset,
+	]);
 
 	// Keep one AudioContext for the component. Closing and recreating it on an effect rerun
 	// permanently silences an HTMLAudioElement because createMediaElementSource may only be
@@ -362,8 +467,10 @@ export function VirtualPreview({
 			audioGraphRef.current,
 			[primaryAudioRef.current, supplementalAudioRef.current],
 			settings.audioGainDb,
+			backgroundMusicRef.current,
+			settings.backgroundMusicGainDb,
 		);
-	}, [settings.audioGainDb]);
+	}, [settings.audioGainDb, settings.backgroundMusicGainDb]);
 
 	const setPrimaryAudioElement = useCallback((element: HTMLAudioElement | null) => {
 		primaryAudioRef.current = element;
@@ -372,6 +479,10 @@ export function VirtualPreview({
 	const setSupplementalAudioElement = useCallback((element: HTMLAudioElement | null) => {
 		supplementalAudioRef.current = element;
 		setSupplementalAudioEl(element);
+	}, []);
+	const setBackgroundMusicElement = useCallback((element: HTMLAudioElement | null) => {
+		backgroundMusicRef.current = element;
+		setBackgroundMusicEl(element);
 	}, []);
 
 	// ponytail: the cursor overlay wants source-media time (the recorded
@@ -426,6 +537,22 @@ export function VirtualPreview({
 	virtualDurationSecRef.current = virtualDurationSec;
 	const speedRegionsRef = useRef(speedRegions);
 	speedRegionsRef.current = speedRegions;
+	const backgroundMusicSettingsRef = useRef({
+		path: settings.backgroundMusicPath,
+		durationSec: settings.backgroundMusicDurationSec,
+		gainDb: settings.backgroundMusicGainDb,
+		loop: settings.backgroundMusicLoop,
+		fadeInSec: settings.backgroundMusicFadeInSec,
+		fadeOutSec: settings.backgroundMusicFadeOutSec,
+	});
+	backgroundMusicSettingsRef.current = {
+		path: settings.backgroundMusicPath,
+		durationSec: settings.backgroundMusicDurationSec,
+		gainDb: settings.backgroundMusicGainDb,
+		loop: settings.backgroundMusicLoop,
+		fadeInSec: settings.backgroundMusicFadeInSec,
+		fadeOutSec: settings.backgroundMusicFadeOutSec,
+	};
 	// Same reasoning as `clipsRef` above, for the one thing the rAF calls rather than reads:
 	// `seekToVirtualTime` is a `useCallback` whose deps include `clips`, so it takes a new
 	// identity on every clip mutation — a REORDER included. The rAF below is deliberately
@@ -469,6 +596,47 @@ export function VirtualPreview({
 					if (playback) void playback.catch(() => undefined);
 				} else if ((v.paused || !target.shouldPlay) && !audio.paused) {
 					audio.pause();
+				}
+			}
+			const music = backgroundMusicRef.current;
+			const musicSettings = backgroundMusicSettingsRef.current;
+			if (music && musicSettings.path && musicSettings.durationSec > 0) {
+				const timelineTime = Math.max(0, virtualTimeSecRef.current);
+				const shouldPlay = musicSettings.loop || timelineTime < musicSettings.durationSec;
+				const target = musicSettings.loop
+					? timelineTime % musicSettings.durationSec
+					: Math.min(timelineTime, musicSettings.durationSec);
+				if (Math.abs(music.currentTime - target) > 0.08) {
+					try {
+						music.currentTime = target;
+					} catch {
+						// metadata not ready yet
+					}
+				}
+				const envelope = backgroundMusicEnvelope(
+					timelineTime,
+					virtualDurationSecRef.current,
+					musicSettings.fadeInSec,
+					musicSettings.fadeOutSec,
+				);
+				if (audioGraphRef.current) {
+					audioGraphRef.current.musicGain.gain.value =
+						audioGainScalar(musicSettings.gainDb) * envelope;
+				} else {
+					music.volume = Math.min(
+						1,
+						audioGainScalar(audioGainDbRef.current) *
+							audioGainScalar(musicSettings.gainDb) *
+							envelope,
+					);
+				}
+				if (!v.paused && shouldPlay && music.paused) {
+					if (audioGraphRef.current?.context.state === "suspended") {
+						void audioGraphRef.current.context.resume();
+					}
+					void music.play().catch(() => undefined);
+				} else if ((v.paused || !shouldPlay) && !music.paused) {
+					music.pause();
 				}
 			}
 			// Publish this frame's live position/rate for other media elements
@@ -694,11 +862,16 @@ export function VirtualPreview({
 		);
 		const playbackRate = activeSpeedRegion?.speed ?? 1;
 		const transform =
-			zoomRegions.length === 0
+			preparedZoomRegions.length === 0
 				? IDENTITY_ZOOM_TRANSFORM
-				: computeZoomPreviewTransform(zoomRegions, virtualTimeSec * 1000, undefined, playbackRate);
+				: computePreparedZoomPreviewTransform(
+						preparedZoomRegions,
+						virtualTimeSec * 1000,
+						undefined,
+						playbackRate,
+					);
 		frame.style.transform = `translate(${transform.translateXPercent}%, ${transform.translateYPercent}%) scale(${transform.scale})`;
-	}, [zoomRegions, virtualTimeSec]);
+	}, [preparedZoomRegions, virtualTimeSec]);
 
 	/**
 	 * Write a source position onto the element with AT MOST ONE demuxer seek in
@@ -1144,6 +1317,20 @@ export function VirtualPreview({
 								preload="metadata"
 								aria-hidden="true"
 								data-testid="preview-audio-supplemental"
+							/>
+						) : null}
+						{settings.backgroundMusicPath ? (
+							<audio
+								key={settings.backgroundMusicPath}
+								ref={setBackgroundMusicElement}
+								src={
+									/^(blob:|data:|https?:|file:)/.test(settings.backgroundMusicPath)
+										? settings.backgroundMusicPath
+										: toFileUrl(settings.backgroundMusicPath)
+								}
+								preload="metadata"
+								aria-hidden="true"
+								data-testid="preview-background-music"
 							/>
 						) : null}
 						{/* Plus d'overlay ici du tout. « Loading preview… » reflétait l'état du

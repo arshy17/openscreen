@@ -335,6 +335,33 @@ describe("deriveCaptionCues", () => {
 		expect(cues[0].startMs).toBe(0);
 	});
 
+	it("does not render Whisper's blank-audio sentinel as a caption", () => {
+		const blankTranscript: AxcutTranscript = {
+			assetId: "asset-1",
+			language: "en",
+			segments: [
+				{
+					id: "blank-segment",
+					kind: "speech",
+					startSec: 1,
+					endSec: 3,
+					text: "[BLANK_AUDIO]",
+					wordIds: ["blank-word"],
+				},
+			],
+			words: [
+				{
+					id: "blank-word",
+					segmentId: "blank-segment",
+					startSec: 1,
+					endSec: 3,
+					text: "[BLANK_AUDIO]",
+				},
+			],
+		};
+		expect(deriveCaptionCues(doc({ transcripts: [blankTranscript] }), ON, {})).toEqual([]);
+	});
+
 	it("maps source time onto the ruler through the clip's in-point", () => {
 		const shifted = doc({
 			timeline: {

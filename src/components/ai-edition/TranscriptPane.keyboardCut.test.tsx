@@ -72,6 +72,7 @@ function renderPane(
 	trimRanges: AxcutTrimRange[],
 	onAddTrimRange = vi.fn(),
 	busyAssetIds: string[] = [],
+	onUpdateWordText?: (assetId: string, wordId: string, text: string) => void,
 ) {
 	const view = render(
 		<I18nProvider>
@@ -84,6 +85,7 @@ function renderPane(
 				onSeek={vi.fn()}
 				onAddTrimRange={onAddTrimRange}
 				onRemoveTrimRange={vi.fn()}
+				onUpdateWordText={onUpdateWordText}
 				onTranscribe={vi.fn()}
 				canTranscribe
 				isTranscribing={false}
@@ -117,6 +119,50 @@ function cutRange(onAddTrimRange: ReturnType<typeof vi.fn>): [number, number] | 
 
 beforeEach(() => {
 	useProjectStore.setState({ currentTimeSec: 0 });
+});
+
+describe("transcript word corrections", () => {
+	it("commits a corrected word through the document callback", () => {
+		const onUpdateWordText = vi.fn();
+		const { container } = renderPane([], vi.fn(), [], onUpdateWordText);
+		const word = container.querySelector<HTMLElement>('[data-word-id="clip_1:w2"]');
+		if (!word) throw new Error("word not rendered");
+		fireEvent.doubleClick(word);
+
+		const input = container.querySelector<HTMLInputElement>("[data-transcript-word-editor]");
+		if (!input) throw new Error("word editor not rendered");
+		fireEvent.change(input, { target: { value: "two corrected" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+
+		expect(onUpdateWordText).toHaveBeenCalledWith("asset_1", "w2", "two corrected");
+		expect(container.querySelector("[data-transcript-word-editor]")).not.toBeInTheDocument();
+	});
+
+	it("cancels a correction with Escape", () => {
+		const onUpdateWordText = vi.fn();
+		const { container } = renderPane([], vi.fn(), [], onUpdateWordText);
+		const word = container.querySelector<HTMLElement>('[data-word-id="clip_1:w2"]');
+		if (!word) throw new Error("word not rendered");
+		fireEvent.doubleClick(word);
+		const input = container.querySelector<HTMLInputElement>("[data-transcript-word-editor]");
+		if (!input) throw new Error("word editor not rendered");
+		fireEvent.change(input, { target: { value: "discard me" } });
+		fireEvent.keyDown(input, { key: "Escape" });
+
+		expect(onUpdateWordText).not.toHaveBeenCalled();
+		expect(container.querySelector("[data-transcript-word-editor]")).not.toBeInTheDocument();
+	});
+
+	it("does not offer text correction while the asset is transcribing", () => {
+		const onUpdateWordText = vi.fn();
+		const { container } = renderPane([], vi.fn(), ["asset_1"], onUpdateWordText);
+		const word = container.querySelector<HTMLElement>('[data-word-id="clip_1:w2"]');
+		if (!word) throw new Error("word not rendered");
+		fireEvent.doubleClick(word);
+
+		expect(container.querySelector("[data-transcript-word-editor]")).not.toBeInTheDocument();
+		expect(onUpdateWordText).not.toHaveBeenCalled();
+	});
 });
 
 afterEach(() => {

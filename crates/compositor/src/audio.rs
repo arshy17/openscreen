@@ -5,8 +5,11 @@
 use crate::ffi::*;
 
 use crate::regions::SpeedSegment;
-use crate::scene::SceneAudio;
+use crate::scene::{
+    SceneAudio, SceneAudioEnhancement, SceneAudioEnhancementPreset, SceneBackgroundMusic,
+};
 use anyhow::{bail, Result};
+use std::collections::VecDeque;
 use std::f32::consts::PI;
 use std::ffi::CString;
 use std::ptr;
@@ -64,6 +67,444 @@ pub fn finish_audio(mut pcm: PlanarPcm, settings: SceneAudio) -> PlanarPcm {
         *sample = (*sample * trim).clamp(-1.0, 1.0);
     }
     pcm
+}
+
+/// Optional, local voice polish applied to the assembled programme before music.
+///
+/// Off is a literal bypass: old projects and a user who leaves the switch off do
+/// not run through a filter, compressor, or makeup gain. The preview mirrors the
+/// same preset family with WebAudio. Export owns the authoritative whole-programme
+/// pass, which avoids pumping at every trim boundary.
+pub fn enhance_program_audio(
+    mut pcm: PlanarPcm,
+    settings: Option<&SceneAudioEnhancement>,
+) -> PlanarPcm {
+    let Some(settings) = settings else {
+        return pcm;
+    };
+    let samples = pcm.first().map(Vec::len).unwrap_or(0);
+    if samples == 0 {
+        return pcm;
+    }
+    for channel in pcm.iter_mut() {
+        channel.resize(samples, 0.0);
+    }
+
+    let intensity = settings.intensity.clamp(0.0, 1.0);
+    if intensity <= f32::EPSILON {
+        return pcm;
+    }
+    let (cutoff_hz, threshold_db, ratio, makeup_db) = match settings.preset {
+        SceneAudioEnhancementPreset::Clarity => (
+            55.0 + 45.0 * intensity,
+            -14.0 - 4.0 * intensity,
+            1.0 + 2.0 * intensity,
+            1.2 * intensity,
+        ),
+        SceneAudioEnhancementPreset::Podcast => (
+            65.0 + 35.0 * intensity,
+            -17.0 - 5.0 * intensity,
+            1.0 + 3.2 * intensity,
+            2.0 * intensity,
+        ),
+        SceneAudioEnhancementPreset::Broadcast => (
+            80.0 + 45.0 * intensity,
+            -20.0 - 5.0 * intensity,
+            1.0 + 4.5 * intensity,
+            2.8 * intensity,
+        ),
+    };
+
+    // One-pole high-pass. Each channel owns its state; no cross-talk is added.
+    let dt = 1.0 / AUDIO_OUTPUT_SAMPLE_RATE as f32;
+    let rc = 1.0 / (2.0 * PI * cutoff_hz.max(1.0));
+    let alpha = rc / (rc + dt);
+    for channel in pcm.iter_mut() {
+        let mut previous_input = 0.0f32;
+        let mut previous_output = 0.0f32;
+        for sample in channel.iter_mut() {
+            let input = *sample;
+            let output = alpha * (previous_output + input - previous_input);
+            previous_input = input;
+            previous_output = output;
+            *sample = output;
+        }
+    }
+
+    // Optional linked-channel downward expander. This is deliberately a
+    // conservative stationary-noise cleanup rather than a falsely-labelled ML
+    // "voice isolation" stage: quiet room tone is reduced, speech transients
+    // keep their shape, and zero strength is an exact bypass.
+    let noise_strength = settings.noise_reduction_strength.clamp(0.0, 1.0);
+    if noise_strength > f32::EPSILON {
+        let threshold = 0.004 + 0.014 * noise_strength;
+        let floor_gain = 1.0 - 0.88 * noise_strength;
+        let attack = (-1.0 / (0.004 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
+        let release = (-1.0 / (0.09 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
+        let mut envelope = 0.0f32;
+        for index in 0..samples {
+            let peak = pcm
+                .iter()
+                .map(|channel| channel[index].abs())
+                .fold(0.0f32, f32::max);
+            let coeff = if peak > envelope { attack } else { release };
+            envelope = coeff * envelope + (1.0 - coeff) * peak;
+            let openness = (envelope / threshold).clamp(0.0, 1.0);
+            let gain = floor_gain + (1.0 - floor_gain) * openness * openness;
+            for channel in pcm.iter_mut() {
+                channel[index] *= gain;
+            }
+        }
+    }
+
+    // Linked-channel soft compressor so stereo balance cannot wander. The
+    // envelope is intentionally gentle: this is voice polish, not mastering.
+    let attack = (-1.0 / (0.008 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
+    let release = (-1.0 / (0.14 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
+    let makeup = 10.0f32.powf(makeup_db / 20.0);
+    let mut envelope = 0.0f32;
+    for index in 0..samples {
+        let peak = pcm
+            .iter()
+            .map(|channel| channel[index].abs())
+            .fold(0.0f32, f32::max);
+        let coeff = if peak > envelope { attack } else { release };
+        envelope = coeff * envelope + (1.0 - coeff) * peak;
+        let level_db = 20.0 * envelope.max(1.0e-7).log10();
+        let gain_reduction_db = if level_db > threshold_db {
+            threshold_db + (level_db - threshold_db) / ratio - level_db
+        } else {
+            0.0
+        };
+        let gain = 10.0f32.powf(gain_reduction_db / 20.0) * makeup;
+        for channel in pcm.iter_mut() {
+            channel[index] = (channel[index] * gain).clamp(-1.0, 1.0);
+        }
+    }
+
+    pcm
+}
+
+#[derive(Clone, Copy)]
+struct BiquadCoefficients {
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
+}
+
+#[derive(Default)]
+struct BiquadState {
+    z1: f64,
+    z2: f64,
+}
+
+impl BiquadState {
+    fn process(&mut self, input: f64, coefficients: BiquadCoefficients) -> f64 {
+        let output = coefficients.b0 * input + self.z1;
+        self.z1 = coefficients.b1 * input - coefficients.a1 * output + self.z2;
+        self.z2 = coefficients.b2 * input - coefficients.a2 * output;
+        output
+    }
+}
+
+// ITU-R BS.1770 K-weighting coefficients at the compositor's fixed 48 kHz
+// output rate. Measuring the assembled programme with the standard 400 ms /
+// 100 ms overlap and absolute + relative gates keeps pauses from creating a
+// false makeup boost (the old whole-file RMS estimate did exactly that).
+const K_WEIGHT_PRE_FILTER: BiquadCoefficients = BiquadCoefficients {
+    b0: 1.535_124_859_586_97,
+    b1: -2.691_696_189_406_38,
+    b2: 1.198_392_810_852_85,
+    a1: -1.690_659_293_182_41,
+    a2: 0.732_480_774_215_85,
+};
+const K_WEIGHT_RLB_FILTER: BiquadCoefficients = BiquadCoefficients {
+    b0: 1.0,
+    b1: -2.0,
+    b2: 1.0,
+    a1: -1.990_047_454_833_98,
+    a2: 0.990_072_250_366_21,
+};
+const ABSOLUTE_GATE_LUFS: f64 = -70.0;
+const AAC_TRUE_PEAK_HEADROOM_DB: f32 = 0.8;
+
+fn loudness_from_energy(energy: f64) -> f64 {
+    -0.691 + 10.0 * energy.max(1.0e-20).log10()
+}
+
+fn energy_from_loudness(loudness: f64) -> f64 {
+    10.0f64.powf((loudness + 0.691) / 10.0)
+}
+
+/// Integrated BS.1770-style loudness for the finished stereo programme.
+/// Returns None for true silence. Memory stays bounded even for multi-hour
+/// edits: only the current 400 ms energy window and block energies are kept.
+fn measure_integrated_loudness(pcm: &PlanarPcm) -> Option<f32> {
+    let samples = pcm.iter().map(Vec::len).min().unwrap_or(0);
+    if samples == 0 {
+        return None;
+    }
+    let channels = pcm.len().min(AUDIO_OUTPUT_CHANNELS);
+    if channels == 0 {
+        return None;
+    }
+
+    let block_samples = (AUDIO_OUTPUT_SAMPLE_RATE as usize * 4) / 10;
+    let hop_samples = AUDIO_OUTPUT_SAMPLE_RATE as usize / 10;
+    let mut pre_states: Vec<BiquadState> = (0..channels).map(|_| BiquadState::default()).collect();
+    let mut rlb_states: Vec<BiquadState> = (0..channels).map(|_| BiquadState::default()).collect();
+    let mut energy_window = VecDeque::with_capacity(block_samples + 1);
+    let mut running_energy = 0.0f64;
+    let mut block_energies = Vec::with_capacity(samples / hop_samples + 1);
+
+    for sample_index in 0..samples {
+        let mut sample_energy = 0.0f64;
+        for channel in 0..channels {
+            let weighted =
+                pre_states[channel].process(pcm[channel][sample_index] as f64, K_WEIGHT_PRE_FILTER);
+            let weighted = rlb_states[channel].process(weighted, K_WEIGHT_RLB_FILTER);
+            sample_energy += weighted * weighted;
+        }
+        energy_window.push_back(sample_energy);
+        running_energy += sample_energy;
+        if energy_window.len() > block_samples {
+            running_energy -= energy_window.pop_front().unwrap_or(0.0);
+        }
+        if energy_window.len() == block_samples
+            && (sample_index + 1 - block_samples).is_multiple_of(hop_samples)
+        {
+            block_energies.push(running_energy / block_samples as f64);
+        }
+    }
+
+    // Short clips still receive a stable estimate rather than silently skipping
+    // the user's target because they do not fill a 400 ms standards block.
+    if block_energies.is_empty() && !energy_window.is_empty() {
+        block_energies.push(running_energy / energy_window.len() as f64);
+    }
+
+    let absolute_gate_energy = energy_from_loudness(ABSOLUTE_GATE_LUFS);
+    let above_absolute: Vec<f64> = block_energies
+        .into_iter()
+        .filter(|energy| *energy >= absolute_gate_energy)
+        .collect();
+    if above_absolute.is_empty() {
+        return None;
+    }
+    let absolute_mean = above_absolute.iter().sum::<f64>() / above_absolute.len() as f64;
+    let relative_gate_lufs = loudness_from_energy(absolute_mean) - 10.0;
+    let relative_gate_energy = energy_from_loudness(relative_gate_lufs.max(ABSOLUTE_GATE_LUFS));
+    let gated: Vec<f64> = above_absolute
+        .into_iter()
+        .filter(|energy| *energy >= relative_gate_energy)
+        .collect();
+    if gated.is_empty() {
+        return None;
+    }
+    let integrated_energy = gated.iter().sum::<f64>() / gated.len() as f64;
+    Some(loudness_from_energy(integrated_energy) as f32)
+}
+
+/// Apply a stereo-linked peak limiter. Gain reduction attacks immediately so
+/// no sample can cross the ceiling, then releases smoothly to avoid pumping.
+/// This is intentionally applied after loudness make-up: unlike a whole-file
+/// peak scale it can control short transients without turning the rest of a
+/// quiet recording back down.
+fn apply_peak_limiter(pcm: &mut PlanarPcm, ceiling: f32) {
+    let sample_count = pcm.first().map(Vec::len).unwrap_or(0);
+    if sample_count == 0 {
+        return;
+    }
+    let release = (-1.0 / (0.08 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
+    let mut gain = 1.0f32;
+    for sample_index in 0..sample_count {
+        let peak = pcm
+            .iter()
+            .filter_map(|channel| channel.get(sample_index))
+            .map(|sample| sample.abs())
+            .fold(0.0f32, f32::max);
+        let required_gain = if peak > ceiling && peak > 0.0 {
+            ceiling / peak
+        } else {
+            1.0
+        };
+        gain = if required_gain < gain {
+            required_gain
+        } else {
+            release * gain + (1.0 - release) * required_gain
+        };
+        for channel in pcm.iter_mut() {
+            if let Some(sample) = channel.get_mut(sample_index) {
+                *sample *= gain;
+            }
+        }
+    }
+}
+
+fn apply_gain_db(pcm: &mut PlanarPcm, gain_db: f32) {
+    let gain = 10.0f32.powf(gain_db / 20.0);
+    for sample in pcm.iter_mut().flatten() {
+        *sample *= gain;
+    }
+}
+
+/// Finalize loudness and peak safety after voice processing, soundtrack mixing,
+/// and output trim. The AAC encoder can create inter-sample overshoot, so its
+/// limiter ceiling reserves a small codec headroom while still honoring the
+/// user-facing maximum.
+fn master_output_audio(mut pcm: PlanarPcm, settings: Option<&SceneAudioEnhancement>) -> PlanarPcm {
+    let Some(settings) = settings else {
+        return pcm;
+    };
+    if let (Some(target_lufs), Some(measured_lufs)) =
+        (settings.target_lufs, measure_integrated_loudness(&pcm))
+    {
+        let requested_gain_db =
+            (target_lufs.clamp(-24.0, -10.0) - measured_lufs).clamp(-24.0, 24.0);
+        apply_gain_db(&mut pcm, requested_gain_db);
+    }
+
+    if let Some(ceiling_db) = settings.limiter_ceiling_db {
+        let safe_ceiling_db = ceiling_db.clamp(-6.0, -0.1) - AAC_TRUE_PEAK_HEADROOM_DB;
+        let ceiling = 10.0f32.powf(safe_ceiling_db / 20.0);
+        apply_peak_limiter(&mut pcm, ceiling);
+        // Limiting short peaks can pull integrated loudness slightly below the
+        // requested preset. Two bounded correction passes make that loss back
+        // up through the limiter, matching the two-pass workflow used by
+        // broadcast loudness tools without ever crossing the peak ceiling.
+        if let Some(target_lufs) = settings.target_lufs {
+            let target_lufs = target_lufs.clamp(-24.0, -10.0);
+            for _ in 0..2 {
+                let Some(measured_lufs) = measure_integrated_loudness(&pcm) else {
+                    break;
+                };
+                let correction_db = (target_lufs - measured_lufs).clamp(-3.0, 3.0);
+                if correction_db.abs() < 0.1 {
+                    break;
+                }
+                apply_gain_db(&mut pcm, correction_db);
+                apply_peak_limiter(&mut pcm, ceiling);
+            }
+        }
+    }
+    for sample in pcm.iter_mut().flatten() {
+        *sample = sample.clamp(-1.0, 1.0);
+    }
+    pcm
+}
+
+/// Mix one decoded music bed across the assembled programme timeline.
+///
+/// This is deliberately after clip trimming/speed changes/concatenation: a soundtrack belongs
+/// to the finished programme, not to any source clip. Looping wraps the decoded music while
+/// fades are measured once against the programme's beginning and end, so a loop boundary never
+/// creates an unintended fade or volume jump. The master output trim is applied afterwards by
+/// `finish_audio`, to the exact same sum the user hears in the preview.
+pub fn mix_background_music(
+    mut programme: PlanarPcm,
+    music: &PlanarPcm,
+    settings: &SceneBackgroundMusic,
+) -> PlanarPcm {
+    let programme_samples = programme.first().map(Vec::len).unwrap_or(0);
+    let music_samples = music.first().map(Vec::len).unwrap_or(0);
+    if programme_samples == 0 || music_samples == 0 {
+        return programme;
+    }
+    for channel in programme.iter_mut() {
+        channel.resize(programme_samples, 0.0);
+    }
+
+    let music_gain = 10.0f32.powf(settings.gain_db.clamp(-40.0, 0.0) / 20.0);
+    let ducking_amount_db = settings.ducking_amount_db.clamp(0.0, 24.0);
+    let duck_attack = (-1.0 / (0.03 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
+    let duck_release = (-1.0 / (0.3 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
+    let mut duck_envelope = 0.0f32;
+    let fade_in = ((settings.fade_in_sec.max(0.0) as f64 * AUDIO_OUTPUT_SAMPLE_RATE as f64).round()
+        as usize)
+        .min(programme_samples);
+    let fade_out = ((settings.fade_out_sec.max(0.0) as f64 * AUDIO_OUTPUT_SAMPLE_RATE as f64)
+        .round() as usize)
+        .min(programme_samples);
+
+    for i in 0..programme_samples {
+        if !settings.r#loop && i >= music_samples {
+            break;
+        }
+        let source_i = i % music_samples;
+        let fade_in_gain = if fade_in > 0 && i < fade_in {
+            i as f32 / fade_in as f32
+        } else {
+            1.0
+        };
+        let remaining = programme_samples - 1 - i;
+        let fade_out_gain = if fade_out > 0 && remaining < fade_out {
+            remaining as f32 / fade_out as f32
+        } else {
+            1.0
+        };
+        let programme_peak = programme
+            .iter()
+            .map(|channel| channel[i].abs())
+            .fold(0.0f32, f32::max);
+        let coeff = if programme_peak > duck_envelope {
+            duck_attack
+        } else {
+            duck_release
+        };
+        duck_envelope = coeff * duck_envelope + (1.0 - coeff) * programme_peak;
+        let activity = ((duck_envelope - 0.012) / 0.12).clamp(0.0, 1.0);
+        let duck_gain = 10.0f32.powf((-ducking_amount_db * activity) / 20.0);
+        let gain = music_gain * fade_in_gain.min(fade_out_gain) * duck_gain;
+        for channel in 0..AUDIO_OUTPUT_CHANNELS {
+            let source = music
+                .get(channel)
+                .or_else(|| music.first())
+                .and_then(|samples| samples.get(source_i))
+                .copied()
+                .unwrap_or(0.0);
+            programme[channel][i] += source * gain;
+        }
+    }
+    programme
+}
+
+/// Decode and mix the optional soundtrack, then apply the master output trim.
+/// A missing/moved/undecodable soundtrack is non-fatal: the edited video still exports with
+/// its programme audio, and the warning names the precise file that was skipped.
+pub fn finish_program_audio(programme: PlanarPcm, settings: &SceneAudio) -> PlanarPcm {
+    let enhancement = settings.enhancement.as_ref();
+    let mut mixed = enhance_program_audio(programme, enhancement);
+    if let Some(background) = settings.background_music.as_ref() {
+        let programme_duration =
+            mixed.first().map(Vec::len).unwrap_or(0) as f64 / AUDIO_OUTPUT_SAMPLE_RATE as f64;
+        let decode_duration = background.duration_sec.max(0.0).min(programme_duration);
+        if decode_duration > 0.0 {
+            match decode_clip_audio(&background.path, 0.0, decode_duration) {
+                Ok(Some(music)) => {
+                    mixed = mix_background_music(mixed, &music, background);
+                }
+                Ok(None) => eprintln!(
+                    "[pipeline] warning: background music has no decodable audio stream: {}",
+                    background.path
+                ),
+                Err(error) => eprintln!(
+                    "[pipeline] warning: background music decode failed for {} ({error:#})",
+                    background.path
+                ),
+            }
+        }
+    }
+    let trimmed = finish_audio(
+        mixed,
+        SceneAudio {
+            gain_db: settings.gain_db,
+            enhancement: None,
+            background_music: None,
+        },
+    );
+    master_output_audio(trimmed, enhancement)
 }
 
 extern "C" {
@@ -167,10 +608,10 @@ impl AudioResampler {
             if delay <= 0 {
                 break;
             }
-            let out_capacity = (((delay * AUDIO_OUTPUT_SAMPLE_RATE as i64)
-                + self.input_rate as i64 - 1)
-                / self.input_rate as i64
-                + 32) as usize;
+            let out_capacity =
+                (((delay * AUDIO_OUTPUT_SAMPLE_RATE as i64) + self.input_rate as i64 - 1)
+                    / self.input_rate as i64
+                    + 32) as usize;
             let mut planes = vec![vec![0.0f32; out_capacity]; AUDIO_OUTPUT_CHANNELS];
             let mut output_ptrs: Vec<*mut u8> = planes
                 .iter_mut()
@@ -232,7 +673,11 @@ impl Drop for AudioTrackDecoder {
 /// le système — et le micro disparaissait de l'export (issue #108). La PR #109 avait corrigé ce
 /// défaut dans l'exporteur navigateur ; l'app n'emprunte plus ce chemin, d'où la même correction
 /// ici, dans le chemin natif.
-pub fn decode_clip_audio(path: &str, source_start_sec: f64, source_end_sec: f64) -> Result<Option<PlanarPcm>> {
+pub fn decode_clip_audio(
+    path: &str,
+    source_start_sec: f64,
+    source_end_sec: f64,
+) -> Result<Option<PlanarPcm>> {
     unsafe { decode_clip_audio_inner(path, source_start_sec, source_end_sec) }
 }
 
@@ -247,7 +692,10 @@ unsafe fn decode_clip_audio_inner(
         avformat_open_input(&mut fmt, cpath.as_ptr(), ptr::null_mut(), ptr::null_mut()),
         "audio open_input",
     )?;
-    averr(avformat_find_stream_info(fmt, ptr::null_mut()), "audio find_stream_info")?;
+    averr(
+        avformat_find_stream_info(fmt, ptr::null_mut()),
+        "audio find_stream_info",
+    )?;
     // Énumération de toutes les pistes audio (voir le commentaire de `decode_clip_audio`).
     let mut audio_stream_count = 0usize;
     let mut tracks: Vec<AudioTrackDecoder> = Vec::new();
@@ -509,15 +957,13 @@ impl WsolaTimeStretcher {
         }
         let mut hs = n / 2;
         if expected_output_samples > 0 {
-            let min_hs = 2usize.max(
-                ((sample_rate as f64 * MIN_FRAME_SEC) / 2.0).round() as usize,
-            );
+            let min_hs = 2usize.max(((sample_rate as f64 * MIN_FRAME_SEC) / 2.0).round() as usize);
             let target_hs = expected_output_samples / TARGET_GRAINS;
             hs = hs.min(min_hs.max(target_hs));
         }
         let n = hs * 2;
-        let search_radius = ((sample_rate as f64 * DEFAULT_SEARCH_SEC).round() as usize)
-            .min(hs) as i64;
+        let search_radius =
+            ((sample_rate as f64 * DEFAULT_SEARCH_SEC).round() as usize).min(hs) as i64;
         Self {
             channels,
             passthrough,
@@ -706,7 +1152,11 @@ impl WsolaTimeStretcher {
                 dot += candidate * self.mono_at(reference_start + k as i64);
                 energy += candidate * candidate;
             }
-            let score = if energy > 0.0 { dot / energy.sqrt() } else { 0.0 };
+            let score = if energy > 0.0 {
+                dot / energy.sqrt()
+            } else {
+                0.0
+            };
             if score > best_score {
                 best_score = score;
                 best_delta = delta;
@@ -972,8 +1422,7 @@ unsafe fn atempo_drain(
         let wanted = count.min(keep.saturating_sub(stretched[0].len()));
         if wanted > 0 {
             let interleaved = *(*frame).extended_data.add(0) as *const f32;
-            let samples =
-                std::slice::from_raw_parts(interleaved, count * AUDIO_OUTPUT_CHANNELS);
+            let samples = std::slice::from_raw_parts(interleaved, count * AUDIO_OUTPUT_CHANNELS);
             for channel in 0..AUDIO_OUTPUT_CHANNELS {
                 let plane = &mut stretched[channel];
                 plane.reserve(wanted);
@@ -1335,7 +1784,10 @@ pub fn build_audio_concat_plan(
         });
         cursor += sample_count;
     }
-    AudioConcatPlan { total_samples: cursor, segments }
+    AudioConcatPlan {
+        total_samples: cursor,
+        segments,
+    }
 }
 
 pub fn assemble_concatenated_pcm(
@@ -1403,9 +1855,15 @@ impl AacEncoder {
         (*context).sample_fmt = AVSampleFormat::AV_SAMPLE_FMT_FLTP;
         (*context).sample_rate = AUDIO_OUTPUT_SAMPLE_RATE;
         (*context).bit_rate = AUDIO_BITRATE;
-        (*context).time_base = AVRational { num: 1, den: AUDIO_OUTPUT_SAMPLE_RATE };
+        (*context).time_base = AVRational {
+            num: 1,
+            den: AUDIO_OUTPUT_SAMPLE_RATE,
+        };
         av_channel_layout_default(&mut (*context).ch_layout, AUDIO_OUTPUT_CHANNELS as i32);
-        averr(avcodec_open2(context, codec, ptr::null_mut()), "aac avcodec_open2")?;
+        averr(
+            avcodec_open2(context, codec, ptr::null_mut()),
+            "aac avcodec_open2",
+        )?;
 
         let stream = avformat_new_stream(output, ptr::null());
         if stream.is_null() {
@@ -1420,10 +1878,18 @@ impl AacEncoder {
         if packet.is_null() {
             bail!("aac av_packet_alloc");
         }
-        Ok(Self { context, stream, packet })
+        Ok(Self {
+            context,
+            stream,
+            packet,
+        })
     }
 
-    pub(crate) unsafe fn encode(&mut self, pcm: &[Vec<f32>], output: *mut AVFormatContext) -> Result<()> {
+    pub(crate) unsafe fn encode(
+        &mut self,
+        pcm: &[Vec<f32>],
+        output: *mut AVFormatContext,
+    ) -> Result<()> {
         let total_samples = pcm.first().map(|channel| channel.len()).unwrap_or(0);
         let frame_size = if (*self.context).frame_size > 0 {
             (*self.context).frame_size as usize
@@ -1452,7 +1918,11 @@ impl AacEncoder {
                 if let Some(source) = pcm.get(channel) {
                     let available = source.len().saturating_sub(offset).min(sample_count);
                     if available > 0 {
-                        ptr::copy_nonoverlapping(source.as_ptr().add(offset), destination, available);
+                        ptr::copy_nonoverlapping(
+                            source.as_ptr().add(offset),
+                            destination,
+                            available,
+                        );
                     }
                 }
             }
@@ -1474,7 +1944,11 @@ impl AacEncoder {
             }
             averr(ret, "aac receive_packet")?;
             (*self.packet).stream_index = (*self.stream).index;
-            av_packet_rescale_ts(self.packet, (*self.context).time_base, (*self.stream).time_base);
+            av_packet_rescale_ts(
+                self.packet,
+                (*self.context).time_base,
+                (*self.stream).time_base,
+            );
             averr(
                 av_interleaved_write_frame(output, self.packet),
                 "aac interleaved_write_frame",
@@ -1567,8 +2041,7 @@ mod tests {
                 // 10 ms de queue : le zero-padding d'avant en laissait au moins 5 ms à 0,1×.
                 // Le trou : un silence numérique en fin de région. Zéro tolérance — la
                 // correction de tempo est faite pour que le contenu tombe pile sur la cible.
-                let trailing_silence =
-                    stretched[0].iter().rev().take_while(|v| **v == 0.0).count();
+                let trailing_silence = stretched[0].iter().rev().take_while(|v| **v == 0.0).count();
                 assert_eq!(
                     trailing_silence, 0,
                     "{trailing_silence} échantillons de silence en fin de région à {speed}× sur {secs}s"
@@ -1659,8 +2132,14 @@ mod tests {
         assert_eq!(atempo_factors(0.2), Some(vec![0.5, 0.5, 0.8]));
         assert_eq!(atempo_factors(250.0), Some(vec![100.0, 2.5]));
         for speed in [0.07f64, 0.3, 1.0, 3.7, 4_000.0] {
-            let product: f64 = atempo_factors(speed).expect("dans le plafond").iter().product();
-            assert!((product - speed).abs() < 1e-9, "produit={product} attendu={speed}");
+            let product: f64 = atempo_factors(speed)
+                .expect("dans le plafond")
+                .iter()
+                .product();
+            assert!(
+                (product - speed).abs() < 1e-9,
+                "produit={product} attendu={speed}"
+            );
         }
         // MIN_PLAYBACK_SPEED tient largement dans le plafond.
         assert_eq!(atempo_factors(0.1).map(|f| f.len()), Some(4));
@@ -1759,7 +2238,10 @@ mod tests {
         for gain_db in [-12.0f32, -6.0206, 0.0, 6.0206, 12.0] {
             let result = finish_audio(
                 planar(&[0.25, -0.25]),
-                SceneAudio { gain_db },
+                SceneAudio {
+                    gain_db,
+                    ..Default::default()
+                },
             );
             let expected = (0.25 * 10.0f32.powf(gain_db / 20.0)).clamp(-1.0, 1.0);
             assert!(
@@ -1775,11 +2257,23 @@ mod tests {
     fn out_of_range_gain_is_clamped_to_the_editor_bound() {
         // A hand-edited project, the AI edition agent, or a future UI change must not be
         // able to ask for a gain the slider cannot display.
-        let quiet = finish_audio(planar(&[0.5]), SceneAudio { gain_db: -99.0 });
+        let quiet = finish_audio(
+            planar(&[0.5]),
+            SceneAudio {
+                gain_db: -99.0,
+                ..Default::default()
+            },
+        );
         let floor = 0.5 * 10.0f32.powf(-12.0 / 20.0);
         assert!((quiet[0][0] - floor).abs() < 1e-6);
 
-        let loud = finish_audio(planar(&[0.1]), SceneAudio { gain_db: 99.0 });
+        let loud = finish_audio(
+            planar(&[0.1]),
+            SceneAudio {
+                gain_db: 99.0,
+                ..Default::default()
+            },
+        );
         let ceiling = 0.1 * 10.0f32.powf(12.0 / 20.0);
         assert!((loud[0][0] - ceiling).abs() < 1e-6);
     }
@@ -1788,10 +2282,210 @@ mod tests {
     fn output_is_clipped_to_full_scale_and_keeps_its_length() {
         // The trim can push a hot signal past full scale; the timeline must come back the
         // same length either way, or video and the following clips drift against it.
-        let result = finish_audio(planar(&[0.9, -0.9, 0.1]), SceneAudio { gain_db: 12.0 });
+        let result = finish_audio(
+            planar(&[0.9, -0.9, 0.1]),
+            SceneAudio {
+                gain_db: 12.0,
+                ..Default::default()
+            },
+        );
         assert_eq!(result[0].len(), 3);
         assert_eq!(result[0][0], 1.0);
         assert_eq!(result[0][1], -1.0);
         assert!((result[0][2] - 0.1 * 10.0f32.powf(12.0 / 20.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn voice_enhancement_is_an_exact_bypass_when_off() {
+        let input = planar(&[0.0, 0.1, -0.2, 0.4]);
+        assert_eq!(enhance_program_audio(input.clone(), None), input);
+    }
+
+    #[test]
+    fn voice_enhancement_preserves_shape_and_processes_when_enabled() {
+        let input = planar(&[0.0, 0.1, -0.2, 0.4, -0.1]);
+        let result = enhance_program_audio(
+            input.clone(),
+            Some(&SceneAudioEnhancement {
+                preset: SceneAudioEnhancementPreset::Podcast,
+                intensity: 0.7,
+                noise_reduction_strength: 0.0,
+                target_lufs: None,
+                limiter_ceiling_db: None,
+            }),
+        );
+        assert_eq!(result.len(), input.len());
+        assert_eq!(result[0].len(), input[0].len());
+        assert_ne!(result, input);
+        assert!(result.iter().flatten().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn mastering_target_and_safety_limiter_are_bounded() {
+        let input = planar(&[0.08; 4_800]);
+        let settings = SceneAudioEnhancement {
+            preset: SceneAudioEnhancementPreset::Clarity,
+            intensity: 0.2,
+            noise_reduction_strength: 0.0,
+            target_lufs: Some(-14.0),
+            limiter_ceiling_db: Some(-1.0),
+        };
+        let enhanced = enhance_program_audio(input, Some(&settings));
+        let result = master_output_audio(enhanced, Some(&settings));
+        let ceiling = 10.0f32.powf(-1.0 / 20.0);
+        assert!(result
+            .iter()
+            .flatten()
+            .all(|sample| sample.abs() <= ceiling + 1.0e-6));
+        assert_eq!(result[0].len(), 4_800);
+    }
+
+    #[test]
+    fn integrated_loudness_gate_ignores_trailing_silence() {
+        let active = sine(3.0);
+        let active_loudness = measure_integrated_loudness(&active).expect("active tone loudness");
+        let mut with_silence = active;
+        for channel in with_silence.iter_mut() {
+            channel.resize(channel.len() + AUDIO_OUTPUT_SAMPLE_RATE as usize * 8, 0.0);
+        }
+        let gated_loudness =
+            measure_integrated_loudness(&with_silence).expect("gated tone loudness");
+        // The four overlapping transition blocks legitimately include part of
+        // the fade into silence; the eight silent seconds themselves must not
+        // drag the result down as whole-file RMS would.
+        assert!(
+            (active_loudness - gated_loudness).abs() < 0.5,
+            "active {active_loudness} LUFS, gated {gated_loudness} LUFS"
+        );
+    }
+
+    #[test]
+    fn mastering_measures_the_combined_programme_and_music() {
+        let mut programme = sine(3.0);
+        for sample in programme.iter_mut().flatten() {
+            *sample *= 0.18;
+        }
+        let music = sine(3.0);
+        let mixed = mix_background_music(
+            programme,
+            &music,
+            &SceneBackgroundMusic {
+                path: "unused-in-pure-test".to_owned(),
+                duration_sec: 3.0,
+                gain_db: -18.0,
+                r#loop: false,
+                fade_in_sec: 0.0,
+                fade_out_sec: 0.0,
+                ducking_amount_db: 0.0,
+            },
+        );
+        let settings = SceneAudioEnhancement {
+            preset: SceneAudioEnhancementPreset::Clarity,
+            intensity: 0.0,
+            noise_reduction_strength: 0.0,
+            target_lufs: Some(-14.0),
+            limiter_ceiling_db: None,
+        };
+        let mastered = master_output_audio(mixed, Some(&settings));
+        let measured = measure_integrated_loudness(&mastered).expect("mastered loudness");
+        assert!(
+            (measured - (-14.0)).abs() < 0.15,
+            "measured {measured} LUFS"
+        );
+    }
+
+    #[test]
+    fn limiter_reserves_headroom_for_aac_true_peak_overshoot() {
+        let settings = SceneAudioEnhancement {
+            preset: SceneAudioEnhancementPreset::Clarity,
+            intensity: 0.0,
+            noise_reduction_strength: 0.0,
+            target_lufs: None,
+            limiter_ceiling_db: Some(-1.0),
+        };
+        let result = master_output_audio(planar(&[1.0, -1.0, 0.9]), Some(&settings));
+        let safe_ceiling = 10.0f32.powf((-1.0 - AAC_TRUE_PEAK_HEADROOM_DB) / 20.0);
+        assert!(result
+            .iter()
+            .flatten()
+            .all(|sample| sample.abs() <= safe_ceiling + 1.0e-6));
+    }
+
+    #[test]
+    fn limiter_allows_quiet_programme_to_reach_loudness_target_despite_transient() {
+        let mut input = sine(3.0);
+        for sample in input.iter_mut().flatten() {
+            *sample *= 0.025;
+        }
+        // One full-scale transient used to make the old whole-file peak scale
+        // reject nearly all loudness make-up for an otherwise quiet programme.
+        input[0][AUDIO_OUTPUT_SAMPLE_RATE as usize] = 1.0;
+        input[1][AUDIO_OUTPUT_SAMPLE_RATE as usize] = 1.0;
+        let settings = SceneAudioEnhancement {
+            preset: SceneAudioEnhancementPreset::Clarity,
+            intensity: 0.0,
+            noise_reduction_strength: 0.0,
+            target_lufs: Some(-14.0),
+            limiter_ceiling_db: Some(-1.0),
+        };
+        let mastered = master_output_audio(input, Some(&settings));
+        let measured = measure_integrated_loudness(&mastered).expect("mastered loudness");
+        let safe_ceiling = 10.0f32.powf((-1.0 - AAC_TRUE_PEAK_HEADROOM_DB) / 20.0);
+        assert!((measured - (-14.0)).abs() < 0.5, "measured {measured} LUFS");
+        assert!(mastered
+            .iter()
+            .flatten()
+            .all(|sample| sample.abs() <= safe_ceiling + 1.0e-6));
+    }
+
+    #[test]
+    fn background_music_loops_and_mixes_under_programme_audio() {
+        let settings = SceneBackgroundMusic {
+            path: "unused-in-pure-test".to_owned(),
+            duration_sec: 2.0,
+            gain_db: 0.0,
+            r#loop: true,
+            fade_in_sec: 0.0,
+            fade_out_sec: 0.0,
+            ducking_amount_db: 0.0,
+        };
+        let mixed = mix_background_music(planar(&[0.25; 5]), &planar(&[0.1, 0.2]), &settings);
+        for (actual, expected) in mixed[0].iter().zip([0.35, 0.45, 0.35, 0.45, 0.35]) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+        assert_eq!(mixed[1], mixed[0]);
+    }
+
+    #[test]
+    fn background_music_fades_once_at_the_programme_edges() {
+        let one_sample = 1.0 / AUDIO_OUTPUT_SAMPLE_RATE as f32;
+        let settings = SceneBackgroundMusic {
+            path: "unused-in-pure-test".to_owned(),
+            duration_sec: 1.0,
+            gain_db: 0.0,
+            r#loop: true,
+            fade_in_sec: one_sample * 2.0,
+            fade_out_sec: one_sample * 2.0,
+            ducking_amount_db: 0.0,
+        };
+        let mixed = mix_background_music(planar(&[0.0; 5]), &planar(&[1.0]), &settings);
+        assert_eq!(mixed[0], vec![0.0, 0.5, 1.0, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn background_music_ducks_under_sustained_programme_audio() {
+        let settings = SceneBackgroundMusic {
+            path: "unused-in-pure-test".to_owned(),
+            duration_sec: 1.0,
+            gain_db: 0.0,
+            r#loop: true,
+            fade_in_sec: 0.0,
+            fade_out_sec: 0.0,
+            ducking_amount_db: 12.0,
+        };
+        let mixed = mix_background_music(planar(&[0.3; 24_000]), &planar(&[0.2]), &settings);
+        let early_music = mixed[0][0] - 0.3;
+        let late_music = mixed[0][23_999] - 0.3;
+        assert!(late_music < early_music * 0.5);
     }
 }

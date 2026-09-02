@@ -15,7 +15,7 @@
 // `depth/2 + 0.5`), the compositor's scene description carried that same
 // formula until it was corrected, and the pill on screen has always read the
 // table below. Wrong at both ends: the range is 1.25×–5.0×, it is not linear,
-// and the default depth 3 renders at 2.00× — not the "3×" a model reads off a
+// and the default depth 2 renders at 1.50× — not the "2×" a model reads off a
 // bare ordinal. Keep the user-facing value here so automatic and manual zooms,
 // native preview, export, timeline labels, and AI tool descriptions stay aligned.
 
@@ -33,7 +33,7 @@ export const ZOOM_DEPTH_SCALES: Record<ZoomDepth, number> = {
 export const MIN_ZOOM_SCALE = 1.0;
 export const MAX_ZOOM_SCALE = 5.0;
 
-export const DEFAULT_ZOOM_DEPTH: ZoomDepth = 3;
+export const DEFAULT_ZOOM_DEPTH: ZoomDepth = 2;
 
 /** Everything `effectiveZoomScale` reads. Deliberately structural, so a stored
  * zoom region, a UI region and a hand-written `{ depth }` all satisfy it. */

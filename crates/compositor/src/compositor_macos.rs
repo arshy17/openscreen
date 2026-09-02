@@ -32,15 +32,19 @@ use crate::ffi::AVFrame;
 // les deux backends — cf. `frame_geometry`, qui documente les divergences que
 // l'unification a corrigées.
 pub use crate::frame_geometry::{
-    live_params_from_scene, webcam_shape_code, FIXTURE_FRAMES, LayerCB, LiveParams, OUT_H, OUT_W,
+    live_params_from_scene, webcam_shape_code, LayerCB, LiveParams, FIXTURE_FRAMES, OUT_H, OUT_W,
 };
-use crate::frame_geometry::{parse_hex, FrameGeometryInput, SCREEN_SHADOW_OFFSET_FRAC,
-    SCREEN_SHADOW_SPREAD_FRAC, WEBCAM_SHADOW_OFFSET_FRAC, WEBCAM_SHADOW_OPACITY,
-    WEBCAM_SHADOW_SPREAD_FRAC};
+use crate::frame_geometry::{
+    parse_hex, FrameGeometryInput, SCREEN_SHADOW_OFFSET_FRAC, SCREEN_SHADOW_SPREAD_FRAC,
+    WEBCAM_SHADOW_OFFSET_FRAC, WEBCAM_SHADOW_OPACITY, WEBCAM_SHADOW_SPREAD_FRAC,
+};
 use crate::scene::{Scene, SceneBackground};
 use anyhow::{anyhow, Result};
+use image::AnimationDecoder;
 use metal::foreign_types::ForeignType;
 use std::cell::RefCell;
+
+type AnnotationImageFrame = (metal::Texture, u32, u32, u32);
 
 /// Budget du cache de textures image (`img_cache`), en octets. Même valeur et même raison que
 /// `compositor_windows::IMG_CACHE_BUDGET_BYTES`.
@@ -328,7 +332,7 @@ pub struct Compositor {
     /// Images d'annotation, indexées par ID d'annotation (pas par data-URL : celle-ci pèse
     /// souvent des mégaoctets et la hacher à chaque frame coûterait plus que le décodage).
     /// La longueur sert de garde-fou quand l'utilisateur change l'image.
-    ann_img_cache: RefCell<std::collections::HashMap<String, (metal::Texture, u32, u32, usize)>>,
+    ann_img_cache: RefCell<std::collections::HashMap<String, (Vec<AnnotationImageFrame>, usize)>>,
     /// Textes rastérisés, indexés par ID, avec la `cache_key` du spec pour invalider.
     text_cache: RefCell<std::collections::HashMap<String, (metal::Texture, u64)>>,
     text_raster: Option<crate::text::TextRasterizer>,
@@ -422,8 +426,14 @@ fn make_pipeline(
         ca.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
         ca.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
         let (src, dst) = match blend {
-            Blend::Over => (metal::MTLBlendFactor::One, metal::MTLBlendFactor::OneMinusSourceAlpha),
-            Blend::Add => (metal::MTLBlendFactor::BlendColor, metal::MTLBlendFactor::One),
+            Blend::Over => (
+                metal::MTLBlendFactor::One,
+                metal::MTLBlendFactor::OneMinusSourceAlpha,
+            ),
+            Blend::Add => (
+                metal::MTLBlendFactor::BlendColor,
+                metal::MTLBlendFactor::One,
+            ),
             Blend::Replace => unreachable!(),
         };
         ca.set_source_rgb_blend_factor(src);
@@ -576,12 +586,20 @@ impl Compositor {
         let blur_quarter = pyramid[1].clone();
         let blur_half = std::mem::replace(&mut pyramid[0], blur_quarter.clone());
         let pipeline_kdown = make_pipeline(
-            device, &library, "vs_fs", "ps_kawase_down",
-            metal::MTLPixelFormat::RGBA8Unorm, Blend::Replace,
+            device,
+            &library,
+            "vs_fs",
+            "ps_kawase_down",
+            metal::MTLPixelFormat::RGBA8Unorm,
+            Blend::Replace,
         )?;
         let pipeline_kup = make_pipeline(
-            device, &library, "vs_fs", "ps_kawase_up",
-            metal::MTLPixelFormat::RGBA8Unorm, Blend::Replace,
+            device,
+            &library,
+            "vs_fs",
+            "ps_kawase_up",
+            metal::MTLPixelFormat::RGBA8Unorm,
+            Blend::Replace,
         )?;
         let ann_copy = {
             let d = metal::TextureDescriptor::new();
@@ -592,9 +610,7 @@ impl Compositor {
             d.set_storage_mode(metal::MTLStorageMode::Private);
             d.set_usage(rt_usage);
             // Assez de niveaux pour que `log2(rayon)` du mode 10 en trouve toujours un.
-            d.set_mipmap_level_count(
-                (32 - rw.max(rh).max(1).leading_zeros()).max(1) as u64,
-            );
+            d.set_mipmap_level_count((32 - rw.max(rh).max(1).leading_zeros()).max(1) as u64);
             device.new_texture(&d)
         };
 
@@ -821,7 +837,12 @@ impl Compositor {
         let (sx, sy) = (spread / rw, spread / rh);
         let (ox, oy) = (offset_px[0] / rw, offset_px[1] / rh);
         let cb = LayerCB {
-            dst: [dst[0] - sx + ox, dst[1] - sy + oy, dst[2] + 2.0 * sx, dst[3] + 2.0 * sy],
+            dst: [
+                dst[0] - sx + ox,
+                dst[1] - sy + oy,
+                dst[2] + 2.0 * sx,
+                dst[3] + 2.0 * sy,
+            ],
             quad_px: [size_px[0] + 2.0 * spread, size_px[1] + 2.0 * spread],
             radius_px: radius,
             mode: 2.0,
@@ -832,7 +853,6 @@ impl Compositor {
         };
         self.draw_solid(enc, &cb);
     }
-
 
     /// Décode un fichier image (jpg/png) — ou une data-URI — en `MTLTexture` RGBA8.
     ///
@@ -848,6 +868,10 @@ impl Compositor {
                 .map_err(|e| anyhow!("wallpaper {path} : {e}"))?
                 .to_rgba8()
         };
+        self.upload_rgba_texture(img)
+    }
+
+    fn upload_rgba_texture(&self, img: image::RgbaImage) -> Result<(metal::Texture, u32, u32)> {
         let (w, h) = (img.width(), img.height());
         let pixels = img.into_raw();
         let tex = make_texture(
@@ -861,13 +885,56 @@ impl Compositor {
         tex.replace_region(
             metal::MTLRegion {
                 origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                size: metal::MTLSize { width: w as u64, height: h as u64, depth: 1 },
+                size: metal::MTLSize {
+                    width: w as u64,
+                    height: h as u64,
+                    depth: 1,
+                },
             },
             0,
             pixels.as_ptr() as *const std::ffi::c_void,
             (w * 4) as u64,
         );
         Ok((tex, w, h))
+    }
+
+    /// Decode every frame of an annotation GIF. Wallpapers remain single-frame; only placed
+    /// annotation media has a timeline start from which a looping animation can be evaluated.
+    fn load_annotation_image_frames(&self, path: &str) -> Result<Vec<AnnotationImageFrame>> {
+        let bytes = if let Some(bytes) = crate::frame_geometry::decode_data_uri(path) {
+            bytes
+        } else {
+            std::fs::read(path).map_err(|e| anyhow!("annotation image {path}: {e}"))?
+        };
+        if image::guess_format(&bytes).ok() != Some(image::ImageFormat::Gif) {
+            let image = image::load_from_memory(&bytes)
+                .map_err(|e| anyhow!("annotation image ({} octets): {e}", bytes.len()))?
+                .to_rgba8();
+            let (texture, width, height) = self.upload_rgba_texture(image)?;
+            return Ok(vec![(texture, width, height, 0)]);
+        }
+
+        let decoder = image::codecs::gif::GifDecoder::new(std::io::BufReader::new(
+            std::io::Cursor::new(bytes),
+        ))
+        .map_err(|e| anyhow!("annotation GIF: {e}"))?;
+        let decoded = decoder
+            .into_frames()
+            .collect_frames()
+            .map_err(|e| anyhow!("annotation GIF frames: {e}"))?;
+        let mut frames = Vec::with_capacity(decoded.len());
+        for frame in decoded {
+            let (numerator, denominator) = frame.delay().numer_denom_ms();
+            let duration_ms = ((numerator as u64 + denominator.max(1) as u64 - 1)
+                / denominator.max(1) as u64)
+                .clamp(20, 10_000) as u32;
+            let (texture, width, height) = self.upload_rgba_texture(frame.into_buffer())?;
+            frames.push((texture, width, height, duration_ms));
+        }
+        if frames.is_empty() {
+            return Err(anyhow!("annotation GIF has no frames"));
+        }
+        Ok(frames)
     }
 
     /// Ouvre une frame du point de vue de `img_cache` : tout ce qui sera touché après cet appel
@@ -897,7 +964,9 @@ impl Compositor {
         // même piège que côté Windows (double emprunt RefCell à la première frame image).
         let hit = self.img_cache.borrow().get(path).cloned();
         if let Some((tex, w, h, _)) = hit {
-            self.img_cache.borrow_mut().insert(path.to_string(), (tex.clone(), w, h, tick));
+            self.img_cache
+                .borrow_mut()
+                .insert(path.to_string(), (tex.clone(), w, h, tick));
             return Ok((tex, w, h));
         }
         let (tex, w, h) = self.load_image_texture(path)?;
@@ -928,7 +997,14 @@ impl Compositor {
         path: &str,
         output_aspect: f32,
     ) -> Result<()> {
-        self.draw_image_in(enc, path, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0], 0.0, output_aspect)
+        self.draw_image_in(
+            enc,
+            path,
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0],
+            0.0,
+            output_aspect,
+        )
     }
 
     /// `draw_image_bg` pour un rect quelconque — la bulle webcam s'en sert avec ses coins
@@ -1024,7 +1100,11 @@ impl Compositor {
             Some(SceneBackground::Image { path }) => {
                 // Même contrat que le fond d'écran : un chemin cassé est loggé puis remplacé par
                 // du noir. Un fallback silencieux redonnerait le bug qu'on corrige.
-                let aspect = if quad_px[1] > 0.0 { quad_px[0] / quad_px[1] } else { 1.0 };
+                let aspect = if quad_px[1] > 0.0 {
+                    quad_px[0] / quad_px[1]
+                } else {
+                    1.0
+                };
                 if let Err(e) = self.draw_image_in(enc, path, dst, quad_px, radius_px, aspect) {
                     eprintln!("[compositor] fond webcam \"{path}\" : {e:#}");
                     self.draw_solid(enc, &solid(BLACK));
@@ -1052,7 +1132,10 @@ impl Compositor {
             Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0)),
             pipeline,
         )?;
-        let cb = LayerCB { fx, ..Default::default() };
+        let cb = LayerCB {
+            fx,
+            ..Default::default()
+        };
         e.set_fragment_bytes(
             0,
             std::mem::size_of::<LayerCB>() as u64,
@@ -1072,16 +1155,51 @@ impl Compositor {
         let (rw, rh) = (self.render_w as f32, self.render_h as f32);
         let (hw, hh) = (rw * 0.5, rh * 0.5);
         // DOWN : texel = 1/(dims de la SOURCE échantillonnée)
-        self.fs_pass(cmd, &self.blur_half, &self.rt, &self.pipeline_kdown, [1.0 / rw, 1.0 / rh, off, 0.0])?;
-        self.fs_pass(cmd, &self.blur_quarter, &self.blur_half, &self.pipeline_kdown, [1.0 / hw, 1.0 / hh, off, 0.0])?;
-        self.fs_pass(cmd, &self.blur_eighth, &self.blur_quarter, &self.pipeline_kdown, [2.0 / hw, 2.0 / hh, off, 0.0])?;
+        self.fs_pass(
+            cmd,
+            &self.blur_half,
+            &self.rt,
+            &self.pipeline_kdown,
+            [1.0 / rw, 1.0 / rh, off, 0.0],
+        )?;
+        self.fs_pass(
+            cmd,
+            &self.blur_quarter,
+            &self.blur_half,
+            &self.pipeline_kdown,
+            [1.0 / hw, 1.0 / hh, off, 0.0],
+        )?;
+        self.fs_pass(
+            cmd,
+            &self.blur_eighth,
+            &self.blur_quarter,
+            &self.pipeline_kdown,
+            [2.0 / hw, 2.0 / hh, off, 0.0],
+        )?;
         // UP
-        self.fs_pass(cmd, &self.blur_quarter, &self.blur_eighth, &self.pipeline_kup, [4.0 / hw, 4.0 / hh, off, 0.0])?;
-        self.fs_pass(cmd, &self.blur_half, &self.blur_quarter, &self.pipeline_kup, [2.0 / hw, 2.0 / hh, off, 0.0])?;
-        self.fs_pass(cmd, &self.rt, &self.blur_half, &self.pipeline_kup, [1.0 / hw, 1.0 / hh, off, 0.0])?;
+        self.fs_pass(
+            cmd,
+            &self.blur_quarter,
+            &self.blur_eighth,
+            &self.pipeline_kup,
+            [4.0 / hw, 4.0 / hh, off, 0.0],
+        )?;
+        self.fs_pass(
+            cmd,
+            &self.blur_half,
+            &self.blur_quarter,
+            &self.pipeline_kup,
+            [2.0 / hw, 2.0 / hh, off, 0.0],
+        )?;
+        self.fs_pass(
+            cmd,
+            &self.rt,
+            &self.blur_half,
+            &self.pipeline_kup,
+            [1.0 / hw, 1.0 / hh, off, 0.0],
+        )?;
         Ok(())
     }
-
 
     /// Ombre d'un écran incliné en 3D : la pénombre suit le QUADRILATÈRE projeté (mode 12),
     /// pas son rect englobant. Port de `compositor_windows::draw_quad_shadow`.
@@ -1097,10 +1215,16 @@ impl Compositor {
         opacity: f32,
     ) {
         let (rw, rh) = (self.render_w as f32, self.render_h as f32);
-        let (min_x, max_x) =
-            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
-        let (min_y, max_y) =
-            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+        let (min_x, max_x) = corners
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| {
+                (mn.min(x), mx.max(x))
+            });
+        let (min_y, max_y) = corners
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| {
+                (mn.min(y), mx.max(y))
+            });
         // La boîte doit contenir la pénombre entière, sinon elle se coupe net.
         let box_w = (max_x - min_x) + 2.0 * spread;
         let box_h = (max_y - min_y) + 2.0 * spread;
@@ -1148,10 +1272,16 @@ impl Compositor {
         // Taille du plan dans son propre repère, avant projection : c'est là que vit le rayon,
         // pour qu'il reste constant le long du bord au lieu de s'étirer avec la perspective.
         let plane_px = [s_px[0] * quad.scale, s_px[1] * quad.scale];
-        let (min_x, max_x) =
-            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
-        let (min_y, max_y) =
-            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+        let (min_x, max_x) = corners
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| {
+                (mn.min(x), mx.max(x))
+            });
+        let (min_y, max_y) = corners
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| {
+                (mn.min(y), mx.max(y))
+            });
         let bbox_w = (max_x - min_x).max(1.0);
         let bbox_h = (max_y - min_y).max(1.0);
         // coins en px LOCAUX à la bbox, pour matcher `i.local` du shader.
@@ -1183,7 +1313,6 @@ impl Compositor {
         );
     }
 
-
     /// Annotations : calque le plus haut, ancré sur `s_ann` — le rect écran SANS ZOOM, le
     /// conteneur que reçoit l'overlay web. Port de `compositor_windows::draw_annotations`.
     ///
@@ -1203,19 +1332,30 @@ impl Compositor {
             return Ok(());
         }
         let (rw, rh) = (self.render_w as f32, self.render_h as f32);
-        let visible = |a: &crate::scene::SceneAnnotation| {
-            t >= a.start_sec as f32 && t < a.end_sec as f32
-        };
+        let visible =
+            |a: &crate::scene::SceneAnnotation| t >= a.start_sec as f32 && t < a.end_sec as f32;
         // UNE seule recopie pour toutes les annotations flou de la frame : leur lecture doit
         // voir l'image composée SANS les flous eux-mêmes, sinon deux zones qui se recouvrent
         // s'échantillonneraient l'une l'autre selon l'ordre de dessin.
-        if scene.annotations.iter().any(|a| a.kind == "blur" && visible(a)) {
+        if scene
+            .annotations
+            .iter()
+            .any(|a| a.kind == "blur" && visible(a))
+        {
             let blit = cmd.new_blit_command_encoder();
             blit.copy_from_texture(
-                &self.rt, 0, 0,
+                &self.rt,
+                0,
+                0,
                 metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                metal::MTLSize { width: rw as u64, height: rh as u64, depth: 1 },
-                &self.ann_copy, 0, 0,
+                metal::MTLSize {
+                    width: rw as u64,
+                    height: rh as u64,
+                    depth: 1,
+                },
+                &self.ann_copy,
+                0,
+                0,
                 metal::MTLOrigin { x: 0, y: 0, z: 0 },
             );
             // Seul le mip 0 est rempli ; le GPU dérive le reste.
@@ -1240,36 +1380,51 @@ impl Compositor {
             }
             match a.kind.as_str() {
                 "figure" => {
-                    let Some(figure) = a.figure.as_ref() else { continue };
+                    let Some(figure) = a.figure.as_ref() else {
+                        continue;
+                    };
                     let (segments, half_stroke) = crate::regions::arrow_local_geometry(
                         &figure.direction,
                         figure.stroke_width,
                         quad_px,
                     );
-                    self.draw_solid(enc, &LayerCB {
-                        dst,
-                        quad_px,
-                        mode: 9.0,
-                        color: parse_hex(&figure.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
-                        fx: segments[0],
-                        src_prev: segments[1],
-                        dst_prev: segments[2],
-                        mb: [1.0, half_stroke, 0.0, 0.0],
-                        ..Default::default()
-                    });
+                    self.draw_solid(
+                        enc,
+                        &LayerCB {
+                            dst,
+                            quad_px,
+                            mode: 9.0,
+                            color: parse_hex(&figure.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
+                            fx: segments[0],
+                            src_prev: segments[1],
+                            dst_prev: segments[2],
+                            mb: [1.0, half_stroke, 0.0, 0.0],
+                            ..Default::default()
+                        },
+                    );
                 }
                 "blur" => {
-                    let Some(blur) = a.blur.as_ref() else { continue };
+                    let Some(blur) = a.blur.as_ref() else {
+                        continue;
+                    };
                     // Le masque en tracé libre demanderait une liste de points côté GPU : on
                     // masque la BOÎTE ENGLOBANTE. Choix délibérément asymétrique — ne rien
                     // dessiner laisserait passer en clair ce que l'utilisateur a désigné comme
                     // à cacher, et un masque qui ne masque pas donne confiance à tort.
                     let freehand = blur.shape == "freehand";
                     let is_blur = if blur.style == "blur" { 1.0 } else { 0.0 };
-                    let amount = if is_blur > 0.5 { blur.intensity } else { blur.block_size };
+                    let amount = if is_blur > 0.5 {
+                        blur.intensity
+                    } else {
+                        blur.block_size
+                    };
                     // Le repli passe par le rectangle, pas l'ovale : un ovale inscrit
                     // retirerait les coins, donc une partie de ce qui est couvert.
-                    let is_oval = if blur.shape == "oval" && !freehand { 1.0 } else { 0.0 };
+                    let is_oval = if blur.shape == "oval" && !freehand {
+                        1.0
+                    } else {
+                        0.0
+                    };
                     // La teinte n'a de sens qu'en mosaïque : un flou teinté ne ressemble plus
                     // à un flou.
                     let tinted = if is_blur > 0.5 { 0.0 } else { 1.0 };
@@ -1279,14 +1434,17 @@ impl Compositor {
                         [1.0, 1.0, 1.0, 1.0]
                     };
                     enc.set_fragment_texture(2, Some(&self.ann_copy));
-                    self.draw_solid(enc, &LayerCB {
-                        dst,
-                        quad_px,
-                        mode: 10.0,
-                        color: tint,
-                        fx: [is_blur, amount.max(1.0), is_oval, tinted],
-                        ..Default::default()
-                    });
+                    self.draw_solid(
+                        enc,
+                        &LayerCB {
+                            dst,
+                            quad_px,
+                            mode: 10.0,
+                            color: tint,
+                            fx: [is_blur, amount.max(1.0), is_oval, tinted],
+                            ..Default::default()
+                        },
+                    );
                 }
                 "image" => {
                     let Some(src) = a.image_path.as_ref().filter(|s| !s.is_empty()) else {
@@ -1294,52 +1452,78 @@ impl Compositor {
                     };
                     let cached = {
                         let c = self.ann_img_cache.borrow();
-                        c.get(&a.id).filter(|(_, _, _, len)| *len == src.len()).cloned()
+                        c.get(&a.id).filter(|(_, len)| *len == src.len()).cloned()
                     };
-                    let Some((tex, iw, ih, _)) = cached.or_else(|| {
-                        match self.load_image_texture(src) {
-                            Ok((tex, w, h)) => {
-                                let e = (tex, w, h, src.len());
-                                self.ann_img_cache.borrow_mut().insert(a.id.clone(), e.clone());
+                    let Some((frames, _)) =
+                        cached.or_else(|| match self.load_annotation_image_frames(src) {
+                            Ok(frames) => {
+                                let e = (frames, src.len());
+                                self.ann_img_cache
+                                    .borrow_mut()
+                                    .insert(a.id.clone(), e.clone());
                                 Some(e)
                             }
                             Err(e) => {
                                 eprintln!("[annotation image] {}: {e:#}", a.id);
                                 None
                             }
-                        }
-                    }) else {
+                        })
+                    else {
                         continue;
                     };
-                    if iw == 0 || ih == 0 {
+                    let total_ms: u32 = frames.iter().map(|frame| frame.3).sum();
+                    let mut loop_ms = if total_ms > 0 {
+                        (((t - a.start_sec as f32).max(0.0) * 1000.0) as u32) % total_ms
+                    } else {
+                        0
+                    };
+                    let mut frame_index = 0;
+                    if frames.len() > 1 {
+                        for (index, frame) in frames.iter().enumerate() {
+                            if loop_ms < frame.3 {
+                                frame_index = index;
+                                break;
+                            }
+                            loop_ms = loop_ms.saturating_sub(frame.3);
+                        }
+                    }
+                    let (tex, iw, ih, _) = &frames[frame_index];
+                    if *iw == 0 || *ih == 0 {
                         continue;
                     }
                     let box_aspect = quad_px[0] / quad_px[1];
-                    let img_aspect = iw as f32 / ih as f32;
+                    let img_aspect = *iw as f32 / *ih as f32;
                     let (fit_w, fit_h) = if img_aspect > box_aspect {
                         (dst[2], dst[3] * (box_aspect / img_aspect))
                     } else {
                         (dst[2] * (img_aspect / box_aspect), dst[3])
                     };
-                    enc.set_fragment_texture(2, Some(&tex));
-                    self.draw_solid(enc, &LayerCB {
-                        dst: [
-                            dst[0] + (dst[2] - fit_w) * 0.5,
-                            dst[1] + (dst[3] - fit_h) * 0.5,
-                            fit_w,
-                            fit_h,
-                        ],
-                        src: [0.0, 0.0, 1.0, 1.0],
-                        quad_px: [fit_w * rw, fit_h * rh],
-                        mode: 7.0,
-                        color: [1.0, 1.0, 1.0, 1.0],
-                        fx: [0.0, 0.0, 1.0, 1.0],
-                        ..Default::default()
-                    });
+                    enc.set_fragment_texture(2, Some(tex));
+                    self.draw_solid(
+                        enc,
+                        &LayerCB {
+                            dst: [
+                                dst[0] + (dst[2] - fit_w) * 0.5,
+                                dst[1] + (dst[3] - fit_h) * 0.5,
+                                fit_w,
+                                fit_h,
+                            ],
+                            src: [0.0, 0.0, 1.0, 1.0],
+                            quad_px: [fit_w * rw, fit_h * rh],
+                            mode: 7.0,
+                            color: [1.0, 1.0, 1.0, 1.0],
+                            fx: [0.0, 0.0, 1.0, 1.0],
+                            ..Default::default()
+                        },
+                    );
                 }
                 "text" => {
-                    let Some(text) = a.text.as_ref() else { continue };
-                    let Some(raster) = self.text_raster.as_ref() else { continue };
+                    let Some(text) = a.text.as_ref() else {
+                        continue;
+                    };
+                    let Some(raster) = self.text_raster.as_ref() else {
+                        continue;
+                    };
                     if text.content.trim().is_empty() {
                         continue;
                     }
@@ -1362,11 +1546,15 @@ impl Compositor {
                     let key = spec.cache_key();
                     let cached = {
                         let c = self.text_cache.borrow();
-                        c.get(&a.id).filter(|(_, k)| *k == key).map(|(tex, _)| tex.clone())
+                        c.get(&a.id)
+                            .filter(|(_, k)| *k == key)
+                            .map(|(tex, _)| tex.clone())
                     };
                     let Some(tex) = cached.or_else(|| match raster.rasterize(&self.gpu, &spec) {
                         Ok(tex) => {
-                            self.text_cache.borrow_mut().insert(a.id.clone(), (tex.clone(), key));
+                            self.text_cache
+                                .borrow_mut()
+                                .insert(a.id.clone(), (tex.clone(), key));
                             Some(tex)
                         }
                         Err(e) => {
@@ -1399,14 +1587,17 @@ impl Compositor {
                         continue;
                     }
                     enc.set_fragment_texture(2, Some(&tex));
-                    self.draw_solid(enc, &LayerCB {
-                        dst: [ax, ay, aw * reveal, ah],
-                        src: [0.0, 0.0, reveal, 1.0],
-                        quad_px: [aw * reveal * rw, ah * rh],
-                        mode: 11.0,
-                        color: [1.0, 1.0, 1.0, anim.opacity],
-                        ..Default::default()
-                    });
+                    self.draw_solid(
+                        enc,
+                        &LayerCB {
+                            dst: [ax, ay, aw * reveal, ah],
+                            src: [0.0, 0.0, reveal, 1.0],
+                            quad_px: [aw * reveal * rw, ah * rh],
+                            mode: 11.0,
+                            color: [1.0, 1.0, 1.0, anim.opacity],
+                            ..Default::default()
+                        },
+                    );
                 }
                 _ => {}
             }
@@ -1414,7 +1605,6 @@ impl Compositor {
         enc.end_encoding();
         Ok(())
     }
-
 
     /// Extrait la frame webcam en RGB8 à la résolution du modèle, dans `out`.
     ///
@@ -1518,7 +1708,11 @@ impl Compositor {
             0,
             0,
             metal::MTLOrigin { x: 0, y: 0, z: 0 },
-            metal::MTLSize { width: width as u64, height: height as u64, depth: 1 },
+            metal::MTLSize {
+                width: width as u64,
+                height: height as u64,
+                depth: 1,
+            },
             &cap.read,
             0,
             0,
@@ -1535,7 +1729,11 @@ impl Compositor {
             (w * 4) as u64,
             metal::MTLRegion {
                 origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                size: metal::MTLSize { width: w as u64, height: h as u64, depth: 1 },
+                size: metal::MTLSize {
+                    width: w as u64,
+                    height: h as u64,
+                    depth: 1,
+                },
             },
             0,
         );
@@ -1564,7 +1762,9 @@ impl Compositor {
     /// `pump_segmentation`. C'est ce qui dispense d'un double buffer, pas la chance.
     pub fn set_webcam_mask(&self, data: &[u8], width: u32, height: u32) -> Result<()> {
         if width == 0 || height == 0 {
-            return Err(anyhow!("masque webcam de dimensions nulles ({width}x{height})"));
+            return Err(anyhow!(
+                "masque webcam de dimensions nulles ({width}x{height})"
+            ));
         }
         let expected = (width as usize) * (height as usize);
         if data.len() < expected {
@@ -1593,7 +1793,11 @@ impl Compositor {
         mask.tex.replace_region(
             metal::MTLRegion {
                 origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                size: metal::MTLSize { width: width as u64, height: height as u64, depth: 1 },
+                size: metal::MTLSize {
+                    width: width as u64,
+                    height: height as u64,
+                    depth: 1,
+                },
             },
             0,
             data.as_ptr() as *const std::ffi::c_void,
@@ -1637,7 +1841,9 @@ impl Compositor {
         // `enable_segmentation` à la main, et un modèle introuvable éteint l'effet au lieu
         // de faire tomber le rendu.
         if self.seg_worker.borrow().is_none() && self.seg_sync.borrow().is_none() {
-            let Some(path) = model_path else { return Ok(()) };
+            let Some(path) = model_path else {
+                return Ok(());
+            };
             if let Err(e) = self.enable_segmentation(std::path::Path::new(&path)) {
                 eprintln!("[segmentation] désactivée : {e}");
                 // Une scène qui reste identique retenterait à chaque frame ; on lève le
@@ -1666,7 +1872,10 @@ impl Compositor {
         // frames défilent aussi vite que la machine décode : le nombre de frames couvertes par
         // un masque dépendrait alors de la charge. En déterministe, une inférence par frame.
         if !self.seg_deterministic.get()
-            && !self.seg_rate.borrow_mut().should_run(std::time::Instant::now())
+            && !self
+                .seg_rate
+                .borrow_mut()
+                .should_run(std::time::Instant::now())
         {
             return Ok(());
         }
@@ -1726,11 +1935,12 @@ impl Compositor {
             return Ok(());
         }
         let inbox = std::sync::Arc::clone(&self.seg_inbox);
-        let worker = crate::segmentation::SegmentationWorker::spawn(segmenter, move |mask, _, _| {
-            // Écrase le masque précédent s'il n'a pas encore été téléversé : c'est le plus
-            // récent qui vaut, jamais une file.
-            *inbox.lock().unwrap() = Some(mask.to_vec());
-        });
+        let worker =
+            crate::segmentation::SegmentationWorker::spawn(segmenter, move |mask, _, _| {
+                // Écrase le masque précédent s'il n'a pas encore été téléversé : c'est le plus
+                // récent qui vaut, jamais une file.
+                *inbox.lock().unwrap() = Some(mask.to_vec());
+            });
         *self.seg_worker.borrow_mut() = Some(worker);
         Ok(())
     }
@@ -1832,7 +2042,11 @@ impl Compositor {
         let (tex, iw, ih) = self.cached_image(sprite.path.as_str())?;
         let (rw, rh) = (self.render_w as f32, self.render_h as f32);
         let ar = iw as f32 / ih.max(1) as f32;
-        let (pw, ph) = if ar >= 1.0 { (size_px, size_px / ar) } else { (size_px * ar, size_px) };
+        let (pw, ph) = if ar >= 1.0 {
+            (size_px, size_px / ar)
+        } else {
+            (size_px * ar, size_px)
+        };
         let hotspot = [sprite.hotspot_x, sprite.hotspot_y];
         let cb = match placement {
             crate::frame_geometry::CursorPlacement::Upright { center } => LayerCB {
@@ -1844,7 +2058,11 @@ impl Compositor {
                 ..Default::default()
             },
             crate::frame_geometry::CursorPlacement::Tilted {
-                plane_pt, quad, center_px, screen_px, ..
+                plane_pt,
+                quad,
+                center_px,
+                screen_px,
+                ..
             } => {
                 // Le sprite est posé DANS le plan : sa taille devient une fraction du plan et
                 // ses quatre coins traversent la même projection que la vidéo. La réduction
@@ -1852,17 +2070,21 @@ impl Compositor {
                 let (wf, hf) = (pw / screen_px[0], ph / screen_px[1]);
                 let x0 = plane_pt[0] - hotspot[0] * wf;
                 let y0 = plane_pt[1] - hotspot[1] * hf;
-                let corners = [(x0, y0), (x0 + wf, y0), (x0 + wf, y0 + hf), (x0, y0 + hf)]
-                    .map(|(fx, fy)| {
+                let corners =
+                    [(x0, y0), (x0 + wf, y0), (x0 + wf, y0 + hf), (x0, y0 + hf)].map(|(fx, fy)| {
                         let (px, py) = quad.point_px(fx, fy);
                         (center_px[0] + px, center_px[1] + py)
                     });
                 let (min_x, max_x) = corners
                     .iter()
-                    .fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
+                    .fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| {
+                        (mn.min(x), mx.max(x))
+                    });
                 let (min_y, max_y) = corners
                     .iter()
-                    .fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+                    .fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| {
+                        (mn.min(y), mx.max(y))
+                    });
                 // Le quad projeté d'un sprite peut être très fin de biais : une bbox d'un pixel
                 // de large ferait diverger le warp inverse, donc plancher à 1 px.
                 let (bw, bh) = ((max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
@@ -1904,7 +2126,9 @@ impl Compositor {
         a: f32,
         clip: [f32; 4],
     ) {
-        let sprite = cursor_type.and_then(|t| sprites.get(t)).or_else(|| sprites.get("arrow"));
+        let sprite = cursor_type
+            .and_then(|t| sprites.get(t))
+            .or_else(|| sprites.get("arrow"));
         if let Some(sprite) = sprite {
             if let Err(e) = self.draw_cursor_sprite(enc, placement, size_px, a, sprite, clip) {
                 eprintln!("[compositor] sprite curseur \"{}\" : {e:#}", sprite.path);
@@ -2000,11 +2224,19 @@ impl Compositor {
                 let c = parse_hex(&color).unwrap_or(lp.bg_color);
                 self.draw_solid(
                     enc,
-                    &LayerCB { dst: [0.0, 0.0, 1.0, 1.0], mode: 1.0, color: c, ..Default::default() },
+                    &LayerCB {
+                        dst: [0.0, 0.0, 1.0, 1.0],
+                        mode: 1.0,
+                        color: c,
+                        ..Default::default()
+                    },
                 );
             }
             Some(SceneBackground::Gradient { angle_deg, stops }) => {
-                let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(lp.bg_color);
+                let c0 = stops
+                    .first()
+                    .and_then(|s| parse_hex(s))
+                    .unwrap_or(lp.bg_color);
                 let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
                 let a = angle_deg.to_radians();
                 self.draw_solid(
@@ -2109,7 +2341,14 @@ impl Compositor {
                 &suv,
             ),
             Some(quad) => self.draw_tilted_screen(
-                enc, quad, s_px, quad_center_px, g.cut, g.s_radius, &sy, &suv,
+                enc,
+                quad,
+                s_px,
+                quad_center_px,
+                g.cut,
+                g.s_radius,
+                &sy,
+                &suv,
             ),
         }
 
@@ -2127,7 +2366,10 @@ impl Compositor {
                     live: lp,
                     scene: scene_ref.as_ref(),
                     track,
-                    t: self.cursor_time.borrow().unwrap_or(frame / crate::frame_geometry::FPS),
+                    t: self
+                        .cursor_time
+                        .borrow()
+                        .unwrap_or(frame / crate::frame_geometry::FPS),
                 },
             );
             if let Some(plan) = plan {
@@ -2138,7 +2380,15 @@ impl Compositor {
                 let kind = plan.cursor_type.as_deref();
                 if plan.taps <= 1 {
                     let e = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?;
-                    self.draw_cur_themed(e, &sprites, kind, plan.placement, plan.size_px, 1.0, plan.clip);
+                    self.draw_cur_themed(
+                        e,
+                        &sprites,
+                        kind,
+                        plan.placement,
+                        plan.size_px,
+                        1.0,
+                        plan.clip,
+                    );
                     e.end_encoding();
                 } else {
                     // Flou RÉEL, pas des copies discrètes : les N échantillons s'accumulent dans
@@ -2181,10 +2431,16 @@ impl Compositor {
             let [cu0, cv0, cu1, cv1] = crate::frame_geometry::webcam_source_rect(
                 [wcw, wch],
                 [wtw as f32, wth as f32],
-                scene_ref.as_ref().and_then(|scene| scene.layout.webcam_crop),
+                scene_ref
+                    .as_ref()
+                    .and_then(|scene| scene.layout.webcam_crop),
                 g.w_px[0] / g.w_px[1].max(0.0001),
             );
-            let (u0, u1) = if lp.webcam_mirror { (cu1, cu0) } else { (cu0, cu1) };
+            let (u0, u1) = if lp.webcam_mirror {
+                (cu1, cu0)
+            } else {
+                (cu0, cu1)
+            };
             let webcam_is_block = matches!(
                 g.scene_preset.as_deref(),
                 Some("dual-frame") | Some("vertical-stack")
@@ -2295,7 +2551,9 @@ impl Compositor {
         ca.set_load_action(metal::MTLLoadAction::Clear);
         ca.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
         ca.set_store_action(metal::MTLStoreAction::Store);
-        cmd_buf.new_render_command_encoder(&pass_desc).end_encoding();
+        cmd_buf
+            .new_render_command_encoder(&pass_desc)
+            .end_encoding();
 
         // Ni miroir RGBA ni attente ici : le miroir ne sert qu'à `readback_direct` (la
         // preview), et l'export ne lit jamais le RGBA — le blit pleine résolution était payé
@@ -2335,7 +2593,9 @@ impl Compositor {
         _frame: u32,
         _cfg: &Cfg,
     ) -> Result<()> {
-        Err(anyhow!("compositor_macos::compose_frame_mb: non implémenté"))
+        Err(anyhow!(
+            "compositor_macos::compose_frame_mb: non implémenté"
+        ))
     }
 
     /// First-pass engine : la cible est toujours le NV12 interne. L'argument `out_tex`
@@ -2356,7 +2616,8 @@ impl Compositor {
         }
         let cache = &self.metal_texture_cache;
         let y = cache.make_texture_from_pixel_buffer(out_tex, 0, metal::MTLPixelFormat::R8Unorm)?;
-        let uv = cache.make_texture_from_pixel_buffer(out_tex, 1, metal::MTLPixelFormat::RG8Unorm)?;
+        let uv =
+            cache.make_texture_from_pixel_buffer(out_tex, 1, metal::MTLPixelFormat::RG8Unorm)?;
 
         let cmd_buf = self.gpu.context.new_command_buffer();
         for (target, pipeline) in [(&y, &self.pipeline_fs_y), (&uv, &self.pipeline_fs_uv)] {
@@ -2417,7 +2678,12 @@ impl Compositor {
 
         let blit = cmd_buf.new_blit_command_encoder();
         for (src, dst, w, h) in [
-            (&self.nv12_y, &self.nv12_read_y, self.render_w, self.render_h),
+            (
+                &self.nv12_y,
+                &self.nv12_read_y,
+                self.render_w,
+                self.render_h,
+            ),
             (
                 &self.nv12_uv,
                 &self.nv12_read_uv,
@@ -2553,7 +2819,6 @@ impl Compositor {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2579,7 +2844,11 @@ mod tests {
     fn region(w: u32, h: u32) -> metal::MTLRegion {
         metal::MTLRegion {
             origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
-            size: metal::MTLSize { width: w as u64, height: h as u64, depth: 1 },
+            size: metal::MTLSize {
+                width: w as u64,
+                height: h as u64,
+                depth: 1,
+            },
         }
     }
 
@@ -2605,7 +2874,12 @@ mod tests {
                 plane[(row * w + col) as usize] = luma(col, row);
             }
         }
-        y.replace_region(region(w, h), 0, plane.as_ptr() as *const std::ffi::c_void, w as u64);
+        y.replace_region(
+            region(w, h),
+            0,
+            plane.as_ptr() as *const std::ffi::c_void,
+            w as u64,
+        );
 
         let (uw, uh) = (w / 2, h / 2);
         let uv = make_texture(
@@ -2630,7 +2904,9 @@ mod tests {
     /// donc un échantillon pris au quart et un aux trois quarts sont loin du dégradé que le
     /// filtrage linéaire pose sur la couture.
     fn half_mask(w: u32, h: u32) -> Vec<u8> {
-        (0..w * h).map(|i| if i % w < w / 2 { 0u8 } else { 255u8 }).collect()
+        (0..w * h)
+            .map(|i| if i % w < w / 2 { 0u8 } else { 255u8 })
+            .collect()
     }
 
     #[test]
@@ -2643,7 +2919,11 @@ mod tests {
         // Moitié gauche noire, moitié droite blanche : la capture doit rendre les deux dans
         // le bon sens. Une inversion d'axe passerait un test de taille sans se voir.
         let (y, uv) = nv12_textures(&gpu.device, 64, 64, |col, _| {
-            if col < 32 { Y_BLACK } else { Y_WHITE }
+            if col < 32 {
+                Y_BLACK
+            } else {
+                Y_WHITE
+            }
         });
 
         let mut out = Vec::new();
@@ -2663,7 +2943,11 @@ mod tests {
             crate::segmentation::MODEL_WIDTH as usize,
             crate::segmentation::MODEL_HEIGHT as usize,
         );
-        assert_eq!(out.len(), w * h * 3, "le modèle veut du RGB8 entrelacé, sans alpha");
+        assert_eq!(
+            out.len(),
+            w * h * 3,
+            "le modèle veut du RGB8 entrelacé, sans alpha"
+        );
 
         let px = |buf: &[u8], col: usize, row: usize| -> [u8; 3] {
             let i = (row * w + col) * 3;
@@ -2671,8 +2955,14 @@ mod tests {
         };
         let left = px(&out, w / 4, h / 2);
         let right = px(&out, 3 * w / 4, h / 2);
-        assert!(left.iter().all(|&c| c < 24), "moitié gauche pas noire : {left:?}");
-        assert!(right.iter().all(|&c| c > 231), "moitié droite pas blanche : {right:?}");
+        assert!(
+            left.iter().all(|&c| c < 24),
+            "moitié gauche pas noire : {left:?}"
+        );
+        assert!(
+            right.iter().all(|&c| c > 231),
+            "moitié droite pas blanche : {right:?}"
+        );
 
         // Deuxième capture sur le même buffer : c'est le régime établi (30 fois par
         // seconde), et il ne doit ni réallouer ni traîner les octets du tour précédent.
@@ -2689,7 +2979,11 @@ mod tests {
             .expect("deuxième capture");
         }
         assert_eq!(out.len(), w * h * 3);
-        assert_eq!(out.capacity(), capacity, "le scratch se réalloue d'une frame à l'autre");
+        assert_eq!(
+            out.capacity(),
+            capacity,
+            "le scratch se réalloue d'une frame à l'autre"
+        );
         assert_eq!(px(&out, w / 4, h / 2), left);
         assert_eq!(px(&out, 3 * w / 4, h / 2), right);
     }
@@ -2703,7 +2997,8 @@ mod tests {
         let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
         let (y, uv) = nv12_textures(&gpu.device, 16, 16, |_, _| Y_WHITE);
         let mut out = Vec::new();
-        let err = unsafe { comp.capture_webcam_rgb(&y, &uv, [0.0, 0.0, 1.0, 1.0], 0, 144, &mut out) };
+        let err =
+            unsafe { comp.capture_webcam_rgb(&y, &uv, [0.0, 0.0, 1.0, 1.0], 0, 144, &mut out) };
         assert!(err.is_err(), "une cible de largeur nulle doit être refusée");
     }
 
@@ -2714,12 +3009,17 @@ mod tests {
             return;
         };
         let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
-        let (w, h) = (crate::segmentation::MODEL_WIDTH, crate::segmentation::MODEL_HEIGHT);
+        let (w, h) = (
+            crate::segmentation::MODEL_WIDTH,
+            crate::segmentation::MODEL_HEIGHT,
+        );
         let mask = vec![255u8; (w * h) as usize];
 
-        comp.set_webcam_mask(&mask, w, h).expect("premier téléversement");
+        comp.set_webcam_mask(&mask, w, h)
+            .expect("premier téléversement");
         let first = comp.webcam_mask.borrow().as_ref().map(|m| m.tex.as_ptr());
-        comp.set_webcam_mask(&mask, w, h).expect("deuxième téléversement");
+        comp.set_webcam_mask(&mask, w, h)
+            .expect("deuxième téléversement");
         let second = comp.webcam_mask.borrow().as_ref().map(|m| m.tex.as_ptr());
         assert_eq!(
             first, second,
@@ -2728,7 +3028,9 @@ mod tests {
 
         // Un masque trop court doit être refusé, pas lu hors bornes : `replace_region` lit
         // `width` octets par ligne sans rien savoir de la longueur de la tranche.
-        assert!(comp.set_webcam_mask(&mask[..(w * h) as usize - 1], w, h).is_err());
+        assert!(comp
+            .set_webcam_mask(&mask[..(w * h) as usize - 1], w, h)
+            .is_err());
         assert!(comp.set_webcam_mask(&mask, 0, h).is_err());
         assert!(comp.clear_webcam_mask() == () && comp.webcam_mask.borrow().is_none());
     }
@@ -2746,7 +3048,8 @@ mod tests {
             return;
         };
         let comp = super::Compositor::new_sized(&gpu, 64, 64).expect("Compositor::new_sized");
-        comp.set_webcam_mask(&half_mask(8, 8), 8, 8).expect("set_webcam_mask");
+        comp.set_webcam_mask(&half_mask(8, 8), 8, 8)
+            .expect("set_webcam_mask");
         let (y, uv) = nv12_textures(&gpu.device, 16, 16, |_, _| Y_WHITE);
 
         // Fond bleu franc : une couleur que la caméra (blanche, chroma neutre) ne peut pas
@@ -2795,8 +3098,16 @@ mod tests {
         };
         let cut = px(16, 32);
         let kept = px(48, 32);
-        assert_eq!(cut, [0, 0, 255, 255], "masque à 0 : le fond doit rester visible");
-        assert_eq!(kept, [255, 255, 255, 255], "masque à 255 : la caméra doit rester opaque");
+        assert_eq!(
+            cut,
+            [0, 0, 255, 255],
+            "masque à 0 : le fond doit rester visible"
+        );
+        assert_eq!(
+            kept,
+            [255, 255, 255, 255],
+            "masque à 255 : la caméra doit rester opaque"
+        );
     }
 
     /// Même montage, mode fond personnalisé (`fx.z = 3`) : là où le masque dit « fond », le
@@ -2809,7 +3120,8 @@ mod tests {
             return;
         };
         let comp = super::Compositor::new_sized(&gpu, 64, 64).expect("Compositor::new_sized");
-        comp.set_webcam_mask(&half_mask(8, 8), 8, 8).expect("set_webcam_mask");
+        comp.set_webcam_mask(&half_mask(8, 8), 8, 8)
+            .expect("set_webcam_mask");
         let (y, uv) = nv12_textures(&gpu.device, 16, 16, |_, _| Y_WHITE);
 
         let cmd = gpu.context.new_command_buffer();
@@ -2851,10 +3163,17 @@ mod tests {
             let i = (row * rw as usize + col) * 4;
             [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
         };
-        assert_eq!(px(16, 32), [255, 0, 0, 255], "fond masqué : la couleur custom doit peindre");
-        assert_eq!(px(48, 32), [255, 255, 255, 255], "sujet : la caméra doit rester intacte");
+        assert_eq!(
+            px(16, 32),
+            [255, 0, 0, 255],
+            "fond masqué : la couleur custom doit peindre"
+        );
+        assert_eq!(
+            px(48, 32),
+            [255, 255, 255, 255],
+            "sujet : la caméra doit rester intacte"
+        );
     }
-
 
     // -----------------------------------------------------------------------
     // `compose_frame` de bout en bout
@@ -2964,7 +3283,8 @@ mod tests {
     }
 
     const NO_EFFECT: &str = "null";
-    const CUTOUT: &str = r#"{"mode":"transparent","blurIntensity":0,"background":null,"modelPath":null}"#;
+    const CUTOUT: &str =
+        r#"{"mode":"transparent","blurIntensity":0,"background":null,"modelPath":null}"#;
 
     /// Le piège que le brief nomme : un mode SANS masque ne doit rien changer.
     ///
@@ -2985,7 +3305,10 @@ mod tests {
             comp.webcam_mask.borrow().is_none(),
             "aucun masque n'a été téléversé : `modelPath` est absent, donc rien ne segmente"
         );
-        assert!(camera_pixels(&plain) > 200, "la caméra n'est pas à l'écran, le test ne prouve rien");
+        assert!(
+            camera_pixels(&plain) > 200,
+            "la caméra n'est pas à l'écran, le test ne prouve rien"
+        );
         assert_eq!(plain, requested, "un mode sans masque a changé des pixels");
     }
 
@@ -3001,10 +3324,17 @@ mod tests {
         };
         let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
         let whole = camera_pixels(&compose_pip(&comp, NO_EFFECT, true));
-        assert!(whole > 200, "la caméra n'est pas à l'écran, le test ne prouve rien");
+        assert!(
+            whole > 200,
+            "la caméra n'est pas à l'écran, le test ne prouve rien"
+        );
 
-        let (mw, mh) = (crate::segmentation::MODEL_WIDTH, crate::segmentation::MODEL_HEIGHT);
-        comp.set_webcam_mask(&half_mask(mw, mh), mw, mh).expect("set_webcam_mask");
+        let (mw, mh) = (
+            crate::segmentation::MODEL_WIDTH,
+            crate::segmentation::MODEL_HEIGHT,
+        );
+        comp.set_webcam_mask(&half_mask(mw, mh), mw, mh)
+            .expect("set_webcam_mask");
         let cut = camera_pixels(&compose_pip(&comp, CUTOUT, true));
 
         let expected = whole as f32 / 2.0;
@@ -3035,8 +3365,12 @@ mod tests {
             "contrôle : sans effet, l'ombre du PiP doit bel et bien se voir"
         );
 
-        let (mw, mh) = (crate::segmentation::MODEL_WIDTH, crate::segmentation::MODEL_HEIGHT);
-        comp.set_webcam_mask(&half_mask(mw, mh), mw, mh).expect("set_webcam_mask");
+        let (mw, mh) = (
+            crate::segmentation::MODEL_WIDTH,
+            crate::segmentation::MODEL_HEIGHT,
+        );
+        comp.set_webcam_mask(&half_mask(mw, mh), mw, mh)
+            .expect("set_webcam_mask");
         assert_eq!(
             compose_pip(&comp, CUTOUT, true),
             compose_pip(&comp, CUTOUT, false),
@@ -3169,7 +3503,9 @@ mod tests {
             std::env::var("OPENSCREEN_SEG_VISUAL"),
             std::env::var("OPENSCREEN_SEG_CAM"),
         ) else {
-            eprintln!("harnais visuel : OPENSCREEN_SEG_VISUAL + OPENSCREEN_SEG_CAM absents — sauté");
+            eprintln!(
+                "harnais visuel : OPENSCREEN_SEG_VISUAL + OPENSCREEN_SEG_CAM absents — sauté"
+            );
             return;
         };
         if !crate::segmentation::runtime_available() {
@@ -3192,7 +3528,11 @@ mod tests {
             // Sans capture d'écran sous la main, un damier : il rend le détourage lisible,
             // là où un aplat laisserait croire à un fond simplement peint.
             Err(_) => FakeFrame::new(640, 360, |col, row| {
-                if (col / 40 + row / 40) % 2 == 0 { 180 } else { 60 }
+                if (col / 40 + row / 40) % 2 == 0 {
+                    180
+                } else {
+                    60
+                }
             }),
         };
         let model_json = serde_json::to_string(&model.to_string_lossy()).expect("chemin");
@@ -3200,9 +3540,24 @@ mod tests {
         let mut wrote = Vec::new();
         for (name, effect) in [
             ("00-none", "null".to_string()),
-            ("01-cutout", format!(r#"{{"mode":"transparent","blurIntensity":0,"background":null,"modelPath":{model_json}}}"#)),
-            ("02-blur", format!(r#"{{"mode":"blur","blurIntensity":0.8,"background":null,"modelPath":{model_json}}}"#)),
-            ("03-custom", format!(r##"{{"mode":"custom","blurIntensity":0,"background":{{"kind":"color","color":"#ff2d95"}},"modelPath":{model_json}}}"##)),
+            (
+                "01-cutout",
+                format!(
+                    r#"{{"mode":"transparent","blurIntensity":0,"background":null,"modelPath":{model_json}}}"#
+                ),
+            ),
+            (
+                "02-blur",
+                format!(
+                    r#"{{"mode":"blur","blurIntensity":0.8,"background":null,"modelPath":{model_json}}}"#
+                ),
+            ),
+            (
+                "03-custom",
+                format!(
+                    r##"{{"mode":"custom","blurIntensity":0,"background":{{"kind":"color","color":"#ff2d95"}},"modelPath":{model_json}}}"##
+                ),
+            ),
         ] {
             // Le masque arrive de façon asynchrone : on tourne jusqu'à ce qu'il soit là, ce
             // qui est aussi une vérification en soi — la boucle du rendu ne l'attend jamais.
@@ -3282,10 +3637,7 @@ mod tests {
             return;
         };
         let library = device
-            .new_library_with_source(
-                include_str!("shaders.metal"),
-                &metal::CompileOptions::new(),
-            )
+            .new_library_with_source(include_str!("shaders.metal"), &metal::CompileOptions::new())
             .expect("shaders.metal doit compiler");
         for name in [
             "vs_main",

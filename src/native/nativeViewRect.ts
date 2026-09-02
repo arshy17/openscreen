@@ -36,16 +36,17 @@ export function computeDeviceRect(
 }
 
 /**
- * Size the interactive preview at CSS-pixel density, capped to 1600x900 while
- * preserving its aspect ratio. This keeps the raw-frame IPC path light enough
- * for a steady 60 fps on HiDPI displays without changing export resolution.
+ * Size the interactive preview at device-pixel density, capped to 1600x900 while
+ * preserving its aspect ratio. Rendering only at CSS-pixel density makes the
+ * canvas visibly soft on Retina/HiDPI displays because Chromium then stretches
+ * one compositor pixel across multiple display pixels. The ceiling still keeps
+ * the raw-frame IPC path bounded without changing export resolution.
  */
 export function computePreviewRect(
 	domRect: { left: number; top: number; width: number; height: number },
 	devicePixelRatio: number,
 ): CompositorViewRect {
-	const ratio =
-		Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? Math.min(1, devicePixelRatio) : 1;
+	const ratio = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
 	const cssRect = computeDeviceRect(domRect, ratio);
 	if (cssRect.width <= 0 || cssRect.height <= 0) {
 		return cssRect;

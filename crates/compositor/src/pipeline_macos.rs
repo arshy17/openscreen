@@ -30,7 +30,7 @@
 //! décodeurs, symétrique.
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_audio,
+    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio, finish_program_audio,
     stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
 };
 use crate::compositor::Compositor;
@@ -102,7 +102,12 @@ impl Decoder {
             let mut fmt: *mut crate::ffi::AVFormatContext = ptr::null_mut();
             let cpath = CString::new(path)?;
             crate::ffi::averr(
-                crate::ffi::avformat_open_input(&mut fmt, cpath.as_ptr(), ptr::null_mut(), ptr::null_mut()),
+                crate::ffi::avformat_open_input(
+                    &mut fmt,
+                    cpath.as_ptr(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                ),
                 "open_input",
             )?;
             crate::ffi::averr(
@@ -160,8 +165,8 @@ impl Decoder {
             // figées par l'ABI de libavcodec.
             const FF_PROFILE_H264_BASELINE: i32 = 66;
             const FF_PROFILE_H264_CONSTRAINED_BASELINE: i32 = 578;
-            let is_baseline =
-                profile == FF_PROFILE_H264_BASELINE || profile == FF_PROFILE_H264_CONSTRAINED_BASELINE;
+            let is_baseline = profile == FF_PROFILE_H264_BASELINE
+                || profile == FF_PROFILE_H264_CONSTRAINED_BASELINE;
             let forced = std::env::var("OPENSCREEN_MAC_DECODE").ok();
             let want_hw = match forced.as_deref() {
                 Some("software") => false,
@@ -223,12 +228,7 @@ impl Decoder {
         // avec son ancien `cur_pts`.
         self.has_peek = false;
         crate::ffi::averr(
-            crate::ffi::av_seek_frame(
-                self.fmt,
-                self.vidx,
-                0,
-                crate::ffi::AVSEEK_FLAG_BACKWARD,
-            ),
+            crate::ffi::av_seek_frame(self.fmt, self.vidx, 0, crate::ffi::AVSEEK_FLAG_BACKWARD),
             "rewind_seek",
         )?;
         crate::ffi::avcodec_flush_buffers(self.dctx);
@@ -280,9 +280,18 @@ impl Decoder {
             }
         }
 
-        let target = if tb_sec > 0.0 { (seconds / tb_sec) as i64 } else { 0 };
+        let target = if tb_sec > 0.0 {
+            (seconds / tb_sec) as i64
+        } else {
+            0
+        };
         crate::ffi::averr(
-            crate::ffi::av_seek_frame(self.fmt, self.vidx, target, crate::ffi::AVSEEK_FLAG_BACKWARD),
+            crate::ffi::av_seek_frame(
+                self.fmt,
+                self.vidx,
+                target,
+                crate::ffi::AVSEEK_FLAG_BACKWARD,
+            ),
             "seek_to",
         )?;
         crate::ffi::avcodec_flush_buffers(self.dctx);
@@ -306,7 +315,11 @@ impl Decoder {
 
     /// Déroule le décodeur en avant jusqu'à la première frame à `seconds` ou après, SANS
     /// jeter son état. Symétrique de `pipeline_windows::Decoder::decode_forward_to`.
-    unsafe fn decode_forward_to(&mut self, seconds: f64, tb_sec: f64) -> Result<*mut crate::ffi::AVFrame> {
+    unsafe fn decode_forward_to(
+        &mut self,
+        seconds: f64,
+        tb_sec: f64,
+    ) -> Result<*mut crate::ffi::AVFrame> {
         loop {
             let f = self.next()?;
             if f.is_null() {
@@ -696,7 +709,10 @@ impl VideoEncoder {
             Some(name) if refused.is_empty() => {
                 bail!("OPENSCREEN_EXPORT_ENCODER={name} ne nomme aucun candidat de ce codec")
             }
-            Some(name) => bail!("OPENSCREEN_EXPORT_ENCODER={name} inutilisable ici : {}", refused[0]),
+            Some(name) => bail!(
+                "OPENSCREEN_EXPORT_ENCODER={name} inutilisable ici : {}",
+                refused[0]
+            ),
             None => bail!(
                 "aucun encodeur vidéo utilisable sur cette machine : {}",
                 refused.join(" ; ")
@@ -784,7 +800,11 @@ impl VideoEncoder {
             return Err(e);
         }
 
-        let mut encoder = VideoEncoder { ctx, sw: ptr::null_mut(), nv12: ptr::null_mut() };
+        let mut encoder = VideoEncoder {
+            ctx,
+            sw: ptr::null_mut(),
+            nv12: ptr::null_mut(),
+        };
         if candidate.pix_fmt != crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX {
             encoder.sw = alloc_sw_frame(candidate.pix_fmt, w, h)?;
             if candidate.pix_fmt != crate::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P {
@@ -813,8 +833,15 @@ impl VideoEncoder {
                     "send_frame",
                 );
             }
-            crate::ffi::averr(crate::ffi::av_frame_make_writable(self.sw), "make_writable_sw")?;
-            let landing = if self.nv12.is_null() { self.sw } else { self.nv12 };
+            crate::ffi::averr(
+                crate::ffi::av_frame_make_writable(self.sw),
+                "make_writable_sw",
+            )?;
+            let landing = if self.nv12.is_null() {
+                self.sw
+            } else {
+                self.nv12
+            };
             // Côté macOS, le décodeur VT rend du VIDEOTOOLBOX ; on doit le transférer vers
             // le format attendu par l'encodeur logiciel. Le `av_hwframe_transfer_data`
             // fait ça si l'encodeur attend du NV12 ; sinon, `nv12_to_yuv420p` est notre
@@ -936,7 +963,12 @@ unsafe fn alloc_sw_frame(
     (*frame).height = h;
     if crate::ffi::av_frame_get_buffer(frame, 32) < 0 {
         crate::ffi::av_frame_free(&mut frame);
-        bail!("av_frame_get_buffer (encodeur) {}x{} pix_fmt={}", w, h, pix_fmt);
+        bail!(
+            "av_frame_get_buffer (encodeur) {}x{} pix_fmt={}",
+            w,
+            h,
+            pix_fmt
+        );
     }
     Ok(frame)
 }
@@ -964,12 +996,7 @@ pub fn run_preview_bench(_gpu: &Gpu) -> Result<Stats> {
     Err(anyhow!("pipeline_macos::run_preview_bench: non implémenté"))
 }
 
-pub fn run_composited(
-    _screen: &str,
-    _out: &str,
-    _gpu: &Gpu,
-    _scene_json: &str,
-) -> Result<Stats> {
+pub fn run_composited(_screen: &str, _out: &str, _gpu: &Gpu, _scene_json: &str) -> Result<Stats> {
     Err(anyhow!("pipeline_macos::run_composited: non implémenté"))
 }
 
@@ -1013,8 +1040,14 @@ pub fn run_composited_multi(
         std::collections::HashMap::new();
 
     // ---- encodeur (candidat VT ou software) ----
-    let mut enc =
-        VideoEncoder::open(&params.codec, gpu, out_w as i32, out_h as i32, out_fps, bit_rate)?;
+    let mut enc = VideoEncoder::open(
+        &params.codec,
+        gpu,
+        out_w as i32,
+        out_h as i32,
+        out_fps,
+        bit_rate,
+    )?;
     let ectx = enc.ctx;
 
     // ---- muxer MP4 ----
@@ -1076,7 +1109,10 @@ pub fn run_composited_multi(
     // exactement le bug de troncature en slow-motion que la doc de `walk_composited_timeline`
     // raconte avoir déjà coûté une fois.
     let scene = comp.scene_snapshot();
-    let audio_settings = scene.as_ref().map(|scene| scene.audio).unwrap_or_default();
+    let audio_settings = scene
+        .as_ref()
+        .map(|scene| scene.audio.clone())
+        .unwrap_or_default();
     frames = unsafe {
         crate::timeline_walk::walk_composited_timeline(
             clips,
@@ -1132,14 +1168,11 @@ pub fn run_composited_multi(
         let declared_audio: Vec<bool> = clips.iter().map(|clip| clip.has_audio).collect();
         let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
         audio_encoder.encode(
-            &finish_audio(assemble_concatenated_pcm(&clip_pcm, &plan), audio_settings),
+            &finish_program_audio(assemble_concatenated_pcm(&clip_pcm, &plan), &audio_settings),
             octx,
         )?;
 
-        crate::ffi::averr(
-            crate::ffi::av_write_trailer(octx),
-            "write_trailer",
-        )?;
+        crate::ffi::averr(crate::ffi::av_write_trailer(octx), "write_trailer")?;
         crate::ffi::avio_closep(&mut pb);
         crate::ffi::avformat_free_context(octx);
         crate::ffi::av_packet_free(&mut opkt);
@@ -1149,7 +1182,11 @@ pub fn run_composited_multi(
     Ok(Stats {
         frames,
         wall_s,
-        fps: if wall_s > 0.0 { frames as f64 / wall_s } else { 0.0 },
+        fps: if wall_s > 0.0 {
+            frames as f64 / wall_s
+        } else {
+            0.0
+        },
         video_duration_s: frames as f64 / out_fps as f64,
     })
 }

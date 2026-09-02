@@ -1,3 +1,4 @@
+import { ChevronLeft, ChevronRight, Loader2, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
@@ -13,6 +14,7 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
+import { updateTranscriptWordText } from "@/lib/ai-edition/document/updateTranscriptWord";
 import { isModalOpen } from "@/lib/ai-edition/modalGuard";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -25,6 +27,10 @@ import {
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import {
+	type MediaInsertionSide,
+	mediaInsertionIndex,
+} from "@/lib/ai-edition/timeline/media-insertion";
 import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
 import { matchesShortcut } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native";
@@ -127,6 +133,7 @@ export function NewEditorShell() {
 	// mounted per trigger site.
 	const [editClipTarget, setEditClipTarget] = useState<AxcutClip | null>(null);
 	const [exportOpen, setExportOpen] = useState(false);
+	const [sideImportBusy, setSideImportBusy] = useState<MediaInsertionSide | null>(null);
 	const [unsavedPrompt, setUnsavedPrompt] = useState<{
 		action: "close" | "new" | "open" | "record";
 		resolve: (choice: UnsavedChoice) => void;
@@ -438,6 +445,46 @@ export function NewEditorShell() {
 		[tl, te, enqueueTimelineWrite],
 	);
 
+	// The controls beside the preview are a direct version of Media -> Import -> Add to
+	// timeline. The selected clip is the anchor when there is one; otherwise the playhead
+	// decides which clip "before" and "after" refer to.
+	const handleImportBesidePreview = useCallback(
+		async (side: MediaInsertionSide) => {
+			if (!projectId) {
+				toast.error(te("mediaStage.openProjectFirst"));
+				return;
+			}
+			const picker = await window.electronAPI?.openVideoFilePicker?.();
+			if (!picker?.success || !picker.path) return;
+
+			setSideImportBusy(side);
+			try {
+				const label = picker.name || picker.path.split(/[\\/]/).pop() || picker.path;
+				const asset = await useProjectStore.getState().addAsset(picker.path, label);
+				if (!asset) return;
+				await enqueueTimelineWrite(() => {
+					const state = useProjectStore.getState();
+					const currentClips = state.document?.timeline.clips ?? [];
+					const index = mediaInsertionIndex(
+						currentClips,
+						state.currentTimeSec,
+						side,
+						tl.clipSelection,
+					);
+					return tl.insertClipAt(asset.id, index);
+				});
+				toast.success(te("mediaStage.addedToTimeline", { label }));
+			} catch (error) {
+				toast.error(te("mediaStage.couldNotAddAsset"), {
+					description: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				setSideImportBusy(null);
+			}
+		},
+		[projectId, te, enqueueTimelineWrite, tl],
+	);
+
 	// Ref so the 'ended' listener below always sees the latest clips without tearing
 	// down and re-registering the DOM listener on every document change. (The playhead
 	// it also needs is read straight off the store at call time — see NativePlaybackSync
@@ -602,6 +649,19 @@ export function NewEditorShell() {
 			);
 		},
 		[applyTimelineOp],
+	);
+
+	const handleUpdateTranscriptWord = useCallback(
+		(assetId: string, wordId: string, text: string) => {
+			void enqueueTimelineWrite(async () => {
+				const doc = useProjectStore.getState().document;
+				if (!doc) return null;
+				const next = updateTranscriptWordText(doc, assetId, wordId, text);
+				if (next === doc) return doc;
+				return (await saveDocument(next, { history: true })) ? next : null;
+			});
+		},
+		[enqueueTimelineWrite, saveDocument],
 	);
 
 	const handleSelectProject = useCallback(
@@ -1151,6 +1211,7 @@ export function NewEditorShell() {
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,
+		onUpdateWordText: handleUpdateTranscriptWord,
 		onTranscribe: handleTranscribe,
 		canTranscribe: hasAsset,
 		isTranscribing: transcriptGate.state === "pending",
@@ -1231,43 +1292,85 @@ export function NewEditorShell() {
 									boxSizing: "border-box",
 								}}
 							>
-								<Preview
-									hasProject={hasProject}
-									hasAsset={hasAsset}
-									videoSources={videoSources}
-									clips={clips}
-									zoomRegions={tl.zoomRegions}
-									speedRegions={tl.speedRegions}
-									cameraFullscreenRegions={tl.cameraFullscreenRegions}
-									trimRanges={tl.trimRanges}
-									selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
-									onZoomFocusChange={tl.updateZoomFocusLive}
-									onZoomFocusCommit={() => void tl.commitZoomFocus()}
-									annotationRegions={tl.annotationRegions}
-									selectedAnnotationId={
-										tl.selection?.kind === "annotation" ? tl.selection.id : null
-									}
-									onSelectAnnotation={(id) => tl.selectRegion("annotation", id)}
-									onAnnotationPositionChange={(id, position) => {
-										// Live seulement : appelé à chaque mouvement de souris pour que le
-										// compositeur natif suive le geste. L'écriture disque se fait une fois,
-										// au relâchement, via `onAnnotationCommit`.
-										tl.updateAnnotationLive(id, { position });
-									}}
-									onAnnotationSizeChange={(id, size) => {
-										tl.updateAnnotationLive(id, { size });
-									}}
-									onAnnotationBlurDataChange={(id, blurData) =>
-										tl.updateAnnotationLive(id, { blurData })
-									}
-									onAnnotationCommit={() => void tl.commitAnnotationChange()}
-									seekTarget={seekTarget}
-									onTimeChange={handleTimeChange}
-									onSeek={handleSeek}
-									onLoadedMetadata={handleLoadedMetadata}
-									onVideoElement={setVideoElement}
-									playing={playing}
-								/>
+								<div className={v4.previewComposer}>
+									<button
+										type="button"
+										className={v4.previewMediaDock}
+										onClick={() => void handleImportBesidePreview("before")}
+										disabled={!hasProject || sideImportBusy !== null}
+										title="Import media before the selected clip"
+										aria-label="Import media before the selected clip"
+									>
+										{sideImportBusy === "before" ? (
+											<Loader2 size={17} className="animate-spin" />
+										) : (
+											<span className={v4.previewMediaDockIcon}>
+												<ChevronLeft size={14} />
+												<Plus size={14} />
+											</span>
+										)}
+										<span>Media</span>
+										<small>Before</small>
+									</button>
+									<div className={v4.previewComposerSurface}>
+										<Preview
+											hasProject={hasProject}
+											hasAsset={hasAsset}
+											videoSources={videoSources}
+											clips={clips}
+											zoomRegions={tl.zoomRegions}
+											speedRegions={tl.speedRegions}
+											cameraFullscreenRegions={tl.cameraFullscreenRegions}
+											trimRanges={tl.trimRanges}
+											selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
+											onZoomFocusChange={tl.updateZoomFocusLive}
+											onZoomFocusCommit={() => void tl.commitZoomFocus()}
+											annotationRegions={tl.annotationRegions}
+											selectedAnnotationId={
+												tl.selection?.kind === "annotation" ? tl.selection.id : null
+											}
+											onSelectAnnotation={(id) => tl.selectRegion("annotation", id)}
+											onAnnotationPositionChange={(id, position) => {
+												// Live seulement : appelé à chaque mouvement de souris pour que le
+												// compositeur natif suive le geste. L'écriture disque se fait une fois,
+												// au relâchement, via `onAnnotationCommit`.
+												tl.updateAnnotationLive(id, { position });
+											}}
+											onAnnotationSizeChange={(id, size) => {
+												tl.updateAnnotationLive(id, { size });
+											}}
+											onAnnotationBlurDataChange={(id, blurData) =>
+												tl.updateAnnotationLive(id, { blurData })
+											}
+											onAnnotationCommit={() => void tl.commitAnnotationChange()}
+											seekTarget={seekTarget}
+											onTimeChange={handleTimeChange}
+											onSeek={handleSeek}
+											onLoadedMetadata={handleLoadedMetadata}
+											onVideoElement={setVideoElement}
+											playing={playing}
+										/>
+									</div>
+									<button
+										type="button"
+										className={v4.previewMediaDock}
+										onClick={() => void handleImportBesidePreview("after")}
+										disabled={!hasProject || sideImportBusy !== null}
+										title="Import media after the selected clip"
+										aria-label="Import media after the selected clip"
+									>
+										{sideImportBusy === "after" ? (
+											<Loader2 size={17} className="animate-spin" />
+										) : (
+											<span className={v4.previewMediaDockIcon}>
+												<Plus size={14} />
+												<ChevronRight size={14} />
+											</span>
+										)}
+										<span>Media</span>
+										<small>After</small>
+									</button>
+								</div>
 							</div>
 							<FloatingInspector
 								facet={facet}

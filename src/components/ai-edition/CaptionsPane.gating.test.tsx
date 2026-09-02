@@ -127,4 +127,44 @@ describe("captions pane gating", () => {
 			screen.getByText("This media has no audio track — there is nothing to transcribe."),
 		).toBeInTheDocument();
 	});
+
+	it("explains a transcript that contains only Whisper's blank-audio marker", () => {
+		const document = documentWith(ASSET);
+		document.transcripts = [
+			{
+				assetId: ASSET.id,
+				language: "en",
+				segments: [
+					{
+						id: "seg_1",
+						kind: "speech",
+						startSec: 1,
+						endSec: 3,
+						text: "[BLANK_AUDIO]",
+						wordIds: ["word_1"],
+					},
+				],
+				words: [
+					{
+						id: "word_1",
+						segmentId: "seg_1",
+						startSec: 1,
+						endSec: 3,
+						text: "[BLANK_AUDIO]",
+					},
+				],
+			},
+		];
+		load(document);
+		render(
+			<I18nProvider>
+				<CaptionsPane />
+			</I18nProvider>,
+		);
+		expect(
+			screen.getByText(
+				"No spoken words were detected in this recording. Captions need audible microphone or system audio.",
+			),
+		).toBeInTheDocument();
+	});
 });

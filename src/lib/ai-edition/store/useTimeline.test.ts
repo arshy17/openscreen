@@ -789,6 +789,7 @@ describe("useTimeline is not re-rendered by playhead ticks", () => {
 		expect(useProjectStore.getState().document?.zoomRanges.at(-1)).toMatchObject({
 			startMs: 4200,
 			endMs: 6200,
+			depth: 2,
 		});
 	});
 

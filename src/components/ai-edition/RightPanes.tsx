@@ -13,6 +13,7 @@ import {
 	Layout as LayoutIcon,
 	Loader2,
 	MousePointerClick,
+	Music2,
 	Sliders,
 	Trash2,
 } from "lucide-react";
@@ -37,6 +38,7 @@ import { toast } from "sonner";
 import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import type {
@@ -48,6 +50,10 @@ import type {
 } from "@/lib/ai-edition/schema";
 import {
 	AUDIO_GAIN_DB_LIMIT,
+	BACKGROUND_MUSIC_FADE_SEC_MAX,
+	BACKGROUND_MUSIC_GAIN_DB_MAX,
+	BACKGROUND_MUSIC_GAIN_DB_MIN,
+	DEFAULT_BACKGROUND_MUSIC_GAIN_DB,
 	type EditorSettingsPatch,
 } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -710,6 +716,7 @@ export function TranscriptPane({
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
+	onUpdateWordText,
 	onTranscribe,
 	canTranscribe,
 	isTranscribing,
@@ -728,6 +735,9 @@ export function TranscriptPane({
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
+	/** Correct the source transcript. Captions derive from these same words, so
+	 *  the preview and export both update from this one write. */
+	onUpdateWordText?: (assetId: string, wordId: string, text: string) => void;
 	onTranscribe: () => void;
 	canTranscribe: boolean;
 	isTranscribing: boolean;
@@ -828,6 +838,15 @@ export function TranscriptPane({
 				<h2>{ts("transcript.title")}</h2>
 			</header>
 			<div className={styles.paneBody}>
+				<p
+					style={{
+						margin: "0 4px 12px",
+						font: "400 11px/1.45 var(--font-body)",
+						color: "var(--muted)",
+					}}
+				>
+					{ts("transcript.editHint")}
+				</p>
 				{sections.map((section, idx) => (
 					<TranscriptClipBlock
 						key={section.clip.id}
@@ -838,6 +857,7 @@ export function TranscriptPane({
 						onSeek={onSeek}
 						onAddTrimRange={onAddTrimRange}
 						onRemoveTrimRange={onRemoveTrimRange}
+						onUpdateWordText={onUpdateWordText}
 					/>
 				))}
 			</div>
@@ -865,6 +885,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
+	onUpdateWordText,
 }: {
 	index: number;
 	section: ClipSection;
@@ -873,6 +894,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
+	onUpdateWordText?: (assetId: string, wordId: string, text: string) => void;
 }) {
 	const ts = useScopedT("settings");
 	const { clip, asset, words } = section;
@@ -1011,6 +1033,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 
 	const handleKeyDown = useCallback(
 		(event: ReactKeyboardEvent<HTMLDivElement>) => {
+			if (event.target instanceof HTMLInputElement) return;
 			if (event.key !== "Backspace" && event.key !== "Delete") return;
 			event.preventDefault();
 			cutNativeSelection(event.key === "Backspace" ? "backward" : "forward");
@@ -1020,6 +1043,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 
 	const handleBeforeInput = useCallback(
 		(event: FormEvent<HTMLDivElement>) => {
+			if (event.target instanceof HTMLInputElement) return;
 			const inputEvent = event.nativeEvent as InputEvent;
 			if (inputEvent.inputType.startsWith("delete")) {
 				event.preventDefault();
@@ -1047,6 +1071,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	);
 
 	const handlePaste = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
+		if (event.target instanceof HTMLInputElement) return;
 		event.preventDefault();
 	}, []);
 
@@ -1056,7 +1081,11 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			// a click on the trim-pill button (bin) bubbles up here
 			// before the button's onClick fires. Skip those — the bin's own
 			// handler is responsible for restoring the skip range.
-			if (event.target instanceof Element && event.target.closest("button")) return;
+			if (
+				event.target instanceof Element &&
+				event.target.closest("button, input, [data-transcript-word-editor]")
+			)
+				return;
 			const editor = editorRef.current;
 			if (!editor) return;
 			const selection = globalThis.getSelection();
@@ -1219,6 +1248,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 							target={trimTarget}
 							onRestore={removeTrimRun}
 							onAddTrimRange={onAddTrimRange}
+							onUpdateText={busy ? undefined : onUpdateWordText}
 						/>
 					))}
 				</div>
@@ -1252,16 +1282,39 @@ const TranscriptWord = memo(function TranscriptWord({
 	target,
 	onRestore,
 	onAddTrimRange,
+	onUpdateText,
 }: {
 	cw: ClipWord;
 	isCue: boolean;
 	target: TrimTarget;
 	onRestore: (run: TrimRun) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
+	onUpdateText?: (assetId: string, wordId: string, text: string) => void;
 }) {
 	const ts = useScopedT("settings");
 	const [hover, setHover] = useState(false);
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState(cw.word.text);
+	const inputRef = useRef<HTMLInputElement | null>(null);
 	const removed = !cw.kept;
+
+	useLayoutEffect(() => {
+		if (!editing) return;
+		inputRef.current?.focus();
+		inputRef.current?.select();
+	}, [editing]);
+
+	useEffect(() => {
+		if (!editing) setDraft(cw.word.text);
+	}, [cw.word.text, editing]);
+
+	const commitEdit = useCallback(() => {
+		const normalized = draft.replace(/\s+/g, " ").trim();
+		setEditing(false);
+		if (normalized && normalized !== cw.word.text) {
+			onUpdateText?.(target.assetId, cw.word.id, normalized);
+		}
+	}, [cw.word.id, cw.word.text, draft, onUpdateText, target.assetId]);
 
 	if (isSilenceWord(cw.word)) {
 		const durationSec = cw.word.endSec - cw.word.startSec;
@@ -1358,11 +1411,58 @@ const TranscriptWord = memo(function TranscriptWord({
 			}}
 			onMouseEnter={() => setHover(true)}
 			onMouseLeave={() => setHover(false)}
+			onDoubleClick={(event) => {
+				if (removed || !onUpdateText) return;
+				event.preventDefault();
+				event.stopPropagation();
+				setDraft(cw.word.text);
+				setEditing(true);
+			}}
+			title={
+				!removed && onUpdateText ? ts("transcript.editWord", { word: cw.word.text }) : undefined
+			}
 		>
 			{/* no filler chip. axcut renders every word the same way;
 			    the LLM is the only place that names a word a filler (via the
 			    filler_or_hesitation reason when generating suggestions). */}
-			{cw.word.text}{" "}
+			{editing ? (
+				<>
+					<input
+						ref={inputRef}
+						data-transcript-word-editor="true"
+						contentEditable={false}
+						value={draft}
+						onChange={(event) => setDraft(event.target.value)}
+						onBlur={commitEdit}
+						onPointerDown={(event) => event.stopPropagation()}
+						onPointerUp={(event) => event.stopPropagation()}
+						onKeyDown={(event) => {
+							event.stopPropagation();
+							if (event.key === "Enter") {
+								event.preventDefault();
+								commitEdit();
+							} else if (event.key === "Escape") {
+								event.preventDefault();
+								setDraft(cw.word.text);
+								setEditing(false);
+							}
+						}}
+						aria-label={ts("transcript.editWord", { word: cw.word.text })}
+						style={{
+							width: `${Math.max(5, Math.min(36, draft.length + 2))}ch`,
+							padding: "1px 4px",
+							border: "1px solid var(--accent)",
+							borderRadius: 4,
+							background: "var(--bg-elevated)",
+							color: "var(--fg)",
+							font: "inherit",
+							outline: "2px solid color-mix(in srgb, var(--accent) 24%, transparent)",
+						}}
+					/>{" "}
+				</>
+			) : (
+				<>{cw.word.text} </>
+			)}
 			{removed && hover && cw.trimId ? (
 				<button
 					type="button"
@@ -2284,8 +2384,185 @@ export function LayoutPane() {
 export function AudioPane() {
 	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	const [pickingMusic, setPickingMusic] = useState(false);
+	const pickMusic = useCallback(async () => {
+		if (!hasDocument || pickingMusic) return;
+		setPickingMusic(true);
+		try {
+			const result = await window.electronAPI?.openAudioFilePicker?.();
+			if (!result?.success || !result.path) return;
+			const selectedPath = result.path;
+			const durationSec = await new Promise<number>((resolve, reject) => {
+				const audio = new Audio();
+				const clear = () => {
+					audio.removeAttribute("src");
+					audio.load();
+				};
+				audio.preload = "metadata";
+				audio.onloadedmetadata = () => {
+					const duration = audio.duration;
+					clear();
+					if (Number.isFinite(duration) && duration > 0) resolve(duration);
+					else reject(new Error(ts("audio.couldNotReadMusic")));
+				};
+				audio.onerror = () => {
+					clear();
+					reject(new Error(ts("audio.couldNotReadMusic")));
+				};
+				audio.src = selectedPath.startsWith("blob:") ? selectedPath : toFileUrl(selectedPath);
+			});
+			await set({
+				backgroundMusicPath: selectedPath,
+				backgroundMusicName: result.name || selectedPath.split(/[\\/]/).pop() || ts("audio.music"),
+				backgroundMusicDurationSec: durationSec,
+				backgroundMusicGainDb: settings.backgroundMusicPath
+					? settings.backgroundMusicGainDb
+					: DEFAULT_BACKGROUND_MUSIC_GAIN_DB,
+			});
+			toast.success(ts("audio.musicAdded"));
+		} catch (error) {
+			toast.error(ts("audio.couldNotAddMusic"), {
+				description: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			setPickingMusic(false);
+		}
+	}, [
+		hasDocument,
+		pickingMusic,
+		set,
+		settings.backgroundMusicGainDb,
+		settings.backgroundMusicPath,
+		ts,
+	]);
+	const removeMusic = useCallback(() => {
+		void set({
+			backgroundMusicPath: null,
+			backgroundMusicName: "",
+			backgroundMusicDurationSec: 0,
+		});
+	}, [set]);
+	const musicDuration = Number.isFinite(settings.backgroundMusicDurationSec)
+		? formatMs(settings.backgroundMusicDurationSec * 1000)
+		: "";
 	return (
 		<Pane title={ts("audio.title")} icon={<AudioLines size={14} />} helpText={ts("audio.help")}>
+			<div
+				style={{
+					margin: "0 var(--sp-4) 12px",
+					padding: 10,
+					border: "1px solid var(--border)",
+					borderRadius: 10,
+					background: "var(--bg)",
+				}}
+			>
+				<div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+					<Music2 size={17} style={{ color: "var(--brand)", flexShrink: 0 }} />
+					<div style={{ minWidth: 0, flex: 1 }}>
+						<div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)" }}>
+							{ts("audio.backgroundMusic")}
+						</div>
+						<div
+							style={{
+								fontSize: 10.5,
+								color: "var(--muted)",
+								whiteSpace: "nowrap",
+								overflow: "hidden",
+								textOverflow: "ellipsis",
+							}}
+							title={settings.backgroundMusicPath ?? undefined}
+						>
+							{settings.backgroundMusicPath
+								? `${settings.backgroundMusicName} · ${musicDuration}`
+								: ts("audio.noMusic")}
+						</div>
+					</div>
+					{settings.backgroundMusicPath ? (
+						<button
+							type="button"
+							className={styles.iconBtn}
+							onClick={removeMusic}
+							aria-label={ts("audio.removeMusic")}
+							title={ts("audio.removeMusic")}
+						>
+							<Trash2 size={14} />
+						</button>
+					) : null}
+				</div>
+				<button
+					type="button"
+					className={styles.secondaryBtn}
+					style={{
+						margin: "10px 0 0",
+						width: "100%",
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "center",
+						gap: 7,
+					}}
+					disabled={!hasDocument || pickingMusic}
+					onClick={() => void pickMusic()}
+				>
+					{pickingMusic ? <Loader2 className="animate-spin" size={13} /> : <Music2 size={13} />}
+					{settings.backgroundMusicPath ? ts("audio.replaceMusic") : ts("audio.addMusic")}
+				</button>
+			</div>
+			{settings.backgroundMusicPath ? (
+				<>
+					<div className={styles.sliderGrid}>
+						<SliderCell
+							label={ts("audio.musicLevel")}
+							value={settings.backgroundMusicGainDb}
+							min={BACKGROUND_MUSIC_GAIN_DB_MIN}
+							max={BACKGROUND_MUSIC_GAIN_DB_MAX}
+							step={0.5}
+							decimals={1}
+							suffix=" dB"
+							onChange={(value) => setLive({ backgroundMusicGainDb: value })}
+							onCommit={() => void commit()}
+						/>
+						<SliderCell
+							label={ts("audio.fadeIn")}
+							value={settings.backgroundMusicFadeInSec}
+							min={0}
+							max={BACKGROUND_MUSIC_FADE_SEC_MAX}
+							step={0.25}
+							decimals={2}
+							suffix=" s"
+							onChange={(value) => setLive({ backgroundMusicFadeInSec: value })}
+							onCommit={() => void commit()}
+						/>
+						<SliderCell
+							label={ts("audio.fadeOut")}
+							value={settings.backgroundMusicFadeOutSec}
+							min={0}
+							max={BACKGROUND_MUSIC_FADE_SEC_MAX}
+							step={0.25}
+							decimals={2}
+							suffix=" s"
+							onChange={(value) => setLive({ backgroundMusicFadeOutSec: value })}
+							onCommit={() => void commit()}
+						/>
+					</div>
+					<div
+						style={{
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "space-between",
+							padding: "0 var(--sp-4) 12px",
+							fontSize: 12,
+							color: "var(--fg-2)",
+						}}
+					>
+						<span>{ts("audio.loopMusic")}</span>
+						<Toggle
+							checked={settings.backgroundMusicLoop}
+							ariaLabel={ts("audio.loopMusic")}
+							onChange={(value) => void set({ backgroundMusicLoop: value })}
+						/>
+					</div>
+				</>
+			) : null}
 			<div className={styles.sliderGrid}>
 				<SliderCell
 					label={ts("audio.outputGain")}

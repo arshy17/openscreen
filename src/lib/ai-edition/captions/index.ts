@@ -5,6 +5,7 @@ export {
 	captionCuesToTextRegions,
 	captionLinesForAsset,
 	deriveCaptionCues,
+	isCaptionableText,
 	sourceSpanToTimelineSpans,
 } from "./cues";
 export type {
@@ -36,6 +37,7 @@ export {
 	getCaptionTranslations,
 	putCaptionTranslation,
 	removeCaptionTranslation,
+	removeCaptionTranslationsForAsset,
 	translationCoverage,
 	untranslatedUnits,
 } from "./translations";

@@ -13,6 +13,7 @@ import {
 	deriveCaptionCues,
 	getCaptionSettings,
 	getCaptionTranslations,
+	isCaptionableText,
 	patchCaptionSettings,
 	putCaptionTranslation,
 	removeCaptionTranslation,
@@ -31,6 +32,8 @@ export interface UseCaptionsResult {
 	hasDocument: boolean;
 	/** True when at least one clip's asset has a transcript to caption. */
 	hasTranscript: boolean;
+	/** True when a timeline transcript contains real viewer-facing words. */
+	hasCaptionableText: boolean;
 	set: (patch: CaptionSettingsPatch) => Promise<void>;
 	setLive: (patch: CaptionSettingsPatch) => void;
 	commit: () => Promise<void>;
@@ -77,6 +80,17 @@ export function useCaptions(): UseCaptionsResult {
 		if (!document) return false;
 		const withTranscript = new Set(document.transcripts.map((t) => t.assetId));
 		return document.timeline.clips.some((clip) => withTranscript.has(clip.assetId));
+	}, [document]);
+
+	const hasCaptionableText = useMemo(() => {
+		if (!document) return false;
+		const timelineAssetIds = new Set(document.timeline.clips.map((clip) => clip.assetId));
+		return document.transcripts.some(
+			(transcript) =>
+				timelineAssetIds.has(transcript.assetId) &&
+				(transcript.words.some((word) => isCaptionableText(word.text)) ||
+					transcript.segments.some((segment) => isCaptionableText(segment.text))),
+		);
 	}, [document]);
 
 	const set = useCallback(
@@ -166,6 +180,7 @@ export function useCaptions(): UseCaptionsResult {
 		cues,
 		hasDocument: document !== null,
 		hasTranscript,
+		hasCaptionableText,
 		set,
 		setLive,
 		commit,
