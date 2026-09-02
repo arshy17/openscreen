@@ -138,6 +138,19 @@ describe("transcript word corrections", () => {
 		expect(container.querySelector("[data-transcript-word-editor]")).not.toBeInTheDocument();
 	});
 
+	it("opens the word editor on the second mouse-down inside contentEditable", () => {
+		const onUpdateWordText = vi.fn();
+		const { container } = renderPane([], vi.fn(), [], onUpdateWordText);
+		const word = container.querySelector<HTMLElement>('[data-word-id="clip_1:w2"]');
+		if (!word) throw new Error("word not rendered");
+
+		fireEvent.mouseDown(word, { button: 0, detail: 2 });
+
+		expect(container.querySelector<HTMLInputElement>("[data-transcript-word-editor]")).toHaveValue(
+			"deux",
+		);
+	});
+
 	it("cancels a correction with Escape", () => {
 		const onUpdateWordText = vi.fn();
 		const { container } = renderPane([], vi.fn(), [], onUpdateWordText);

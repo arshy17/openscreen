@@ -1316,6 +1316,12 @@ const TranscriptWord = memo(function TranscriptWord({
 		}
 	}, [cw.word.id, cw.word.text, draft, onUpdateText, target.assetId]);
 
+	const beginEdit = useCallback(() => {
+		if (removed || !onUpdateText) return;
+		setDraft(cw.word.text);
+		setEditing(true);
+	}, [cw.word.text, onUpdateText, removed]);
+
 	if (isSilenceWord(cw.word)) {
 		const durationSec = cw.word.endSec - cw.word.startSec;
 		const duration = durationSec.toFixed(1);
@@ -1411,12 +1417,22 @@ const TranscriptWord = memo(function TranscriptWord({
 			}}
 			onMouseEnter={() => setHover(true)}
 			onMouseLeave={() => setHover(false)}
+			onMouseDown={(event) => {
+				// Chromium's native word selection can consume `dblclick` inside a
+				// contentEditable parent before React sees it. Start the editor on the
+				// second mouse-down as well, when `detail` already carries the click
+				// count. This keeps ordinary single-click seeking/selection intact while
+				// making the documented double-click correction work in the packaged app.
+				if (event.detail < 2 || removed || !onUpdateText) return;
+				event.preventDefault();
+				event.stopPropagation();
+				beginEdit();
+			}}
 			onDoubleClick={(event) => {
 				if (removed || !onUpdateText) return;
 				event.preventDefault();
 				event.stopPropagation();
-				setDraft(cw.word.text);
-				setEditing(true);
+				beginEdit();
 			}}
 			title={
 				!removed && onUpdateText ? ts("transcript.editWord", { word: cw.word.text }) : undefined
