@@ -38,7 +38,10 @@ import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 //      made them AMBIGUOUS the moment two clips drew from the same asset (a
 //      duplicated clip): every reader either matched both clips or picked the
 //      first. See `upgradeV6DocumentToV7`.
-export const axcutSchemaVersion = 7;
+//   7. v8 — project-managed imports and the Artwork Studio become first-class,
+//      optional document data. Existing v7 projects migrate with empty artwork
+//      collections and otherwise render byte-for-byte as before.
+export const axcutSchemaVersion = 8;
 
 // ponytail: every region schema shares the same monotonicity rule
 // (end >= start) with the same error shape. Factor the refine so the
@@ -105,6 +108,35 @@ export const assetAudioSchema = z.object({
 	channels: z.number().int().nonnegative().default(0),
 });
 
+export const mediaProbeSchema = z.object({
+	container: z.string().default("unknown"),
+	videoCodec: z.string().default("unknown"),
+	audioCodecs: z.array(z.string()).default([]),
+	width: z.number().int().nonnegative().default(0),
+	height: z.number().int().nonnegative().default(0),
+	frameRate: z.number().nonnegative().default(0),
+	averageFrameRate: z.number().nonnegative().default(0),
+	variableFrameRate: z.boolean().default(false),
+	durationSec: z.number().nonnegative().default(0),
+	rotationDegrees: z.number().int().default(0),
+	colorPrimaries: z.string().nullable().default(null),
+	colorTransfer: z.string().nullable().default(null),
+	colorSpace: z.string().nullable().default(null),
+	dynamicRange: z.enum(["sdr", "hdr", "dolby-vision", "unknown"]).default("unknown"),
+	audioTrackCount: z.number().int().nonnegative().default(0),
+	fileSizeBytes: z.number().int().nonnegative().default(0),
+});
+
+export const managedMediaImportSchema = z.object({
+	source: z.enum(["files", "photos"]),
+	originalName: z.string().min(1),
+	importedAt: isoDateSchema,
+	sha256: z.string().regex(/^[a-f0-9]{64}$/),
+	managedOriginalPath: z.string().min(1),
+	proxyStatus: z.enum(["not-needed", "ready", "failed", "cancelled"]).default("not-needed"),
+	probe: mediaProbeSchema,
+});
+
 // ponytail: the webcam is a derived stream — it is NOT edited. Cut / zoom /
 // speed live on the main timeline and apply to the camera as a render of the
 // same source-time progression. Source path comes from the recording
@@ -160,10 +192,115 @@ export const assetSchema = z.object({
 	sizeBytes: z.number().int().nonnegative().optional(),
 	video: assetVideoSchema.optional(),
 	audio: assetAudioSchema.optional(),
+	managedImport: managedMediaImportSchema.optional(),
 	// Absent on every document written before auto-transcription; additive, so
 	// no schema-version bump (an older build simply drops the key on save).
 	transcriptionFailure: assetTranscriptionFailureSchema.nullish(),
 	cameraTrack: cameraTrackSchema,
+});
+
+const artworkLayerBaseSchema = z.object({
+	id: z.string().min(1),
+	name: z.string().min(1),
+	x: z.number(),
+	y: z.number(),
+	width: z.number().positive(),
+	height: z.number().positive(),
+	rotation: z.number().default(0),
+	opacity: z.number().min(0).max(1).default(1),
+	visible: z.boolean().default(true),
+	zIndex: z.number().int().default(0),
+});
+
+export const artworkTextLayerSchema = artworkLayerBaseSchema.extend({
+	type: z.literal("text"),
+	text: z.string(),
+	fontFamily: z.string().default("Inter"),
+	fontSize: z.number().positive().default(96),
+	fontWeight: z.number().int().min(100).max(900).default(800),
+	color: z.string().default("#ffffff"),
+	align: z.enum(["left", "center", "right"]).default("left"),
+	strokeColor: z.string().default("#000000"),
+	strokeWidth: z.number().nonnegative().default(0),
+	shadowColor: z.string().default("#00000099"),
+	shadowBlur: z.number().nonnegative().default(0),
+});
+
+export const artworkImageLayerSchema = artworkLayerBaseSchema.extend({
+	type: z.literal("image"),
+	assetId: z.string().min(1),
+	fit: z.enum(["cover", "contain", "fill"]).default("cover"),
+	cropX: z.number().min(0).max(1).default(0.5),
+	cropY: z.number().min(0).max(1).default(0.5),
+	blur: z.number().nonnegative().default(0),
+	cutout: z.boolean().default(false),
+});
+
+export const artworkShapeLayerSchema = artworkLayerBaseSchema.extend({
+	type: z.literal("shape"),
+	shape: z.enum(["rectangle", "rounded-rectangle", "ellipse", "line"]).default("rectangle"),
+	fill: z.string().default("#111827"),
+	stroke: z.string().default("#ffffff"),
+	strokeWidth: z.number().nonnegative().default(0),
+	cornerRadius: z.number().nonnegative().default(0),
+});
+
+export const artworkIconLayerSchema = artworkLayerBaseSchema.extend({
+	type: z.literal("icon"),
+	icon: z.string().min(1),
+	color: z.string().default("#ffffff"),
+	background: z.string().nullable().default(null),
+});
+
+export const artworkLayerSchema = z.discriminatedUnion("type", [
+	artworkTextLayerSchema,
+	artworkImageLayerSchema,
+	artworkShapeLayerSchema,
+	artworkIconLayerSchema,
+]);
+
+export const artworkAssetSchema = z.object({
+	id: z.string().min(1),
+	label: z.string().min(1),
+	path: z.string().min(1),
+	originalPath: z.string().min(1).optional(),
+	mimeType: z.enum(["image/heic", "image/jpeg", "image/png"]),
+	width: z.number().int().positive(),
+	height: z.number().int().positive(),
+	sha256: z.string().regex(/^[a-f0-9]{64}$/),
+	source: z.enum(["files", "photos", "video-frame"]),
+	sourceAssetId: z.string().optional(),
+	sourceTimeSec: z.number().nonnegative().optional(),
+	createdAt: isoDateSchema,
+});
+
+export const artworkRevisionSchema = z.object({
+	id: z.string().min(1),
+	createdAt: isoDateSchema,
+	label: z.string().min(1),
+	layers: z.array(artworkLayerSchema),
+});
+
+export const artworkDesignSchema = z.object({
+	id: z.string().min(1),
+	name: z.string().min(1),
+	presetId: z.string().min(1),
+	presetRegistryVersion: z.number().int().positive().default(1),
+	width: z.number().int().positive(),
+	height: z.number().int().positive(),
+	background: z.object({
+		kind: z.enum(["solid", "gradient"]).default("solid"),
+		value: z.string().default("#111827"),
+	}),
+	layers: z.array(artworkLayerSchema).default([]),
+	safeAreaPreset: z.string().min(1),
+	sourceAssetId: z.string().optional(),
+	sourceTimeSec: z.number().nonnegative().optional(),
+	brandKitId: z.string().optional(),
+	revision: z.number().int().nonnegative().default(0),
+	revisions: z.array(artworkRevisionSchema).default([]),
+	createdAt: isoDateSchema,
+	updatedAt: isoDateSchema,
 });
 
 // A crop is a sub-rectangle of the source video, expressed as fractions
@@ -503,6 +640,8 @@ const documentSchemaShape = z.object({
 	}),
 	annotations: z.array(annotationRegionSchema).default([]),
 	zoomRanges: z.array(zoomRegionSchema).default([]),
+	artworkAssets: z.array(artworkAssetSchema).default([]),
+	artworkDesigns: z.array(artworkDesignSchema).default([]),
 	legacyEditor: legacyEditorSchema.nullable().default(null),
 });
 
@@ -511,7 +650,7 @@ const documentSchemaShape = z.object({
 // the owning asset (see `assetSchema.cameraTrack` above) so each asset in a
 // multi-clip project can carry its own camera link. This is invoked at LOAD
 // TIME by `migrateRawDocumentToCurrent` in `document/migrate.ts`, not at every
-// `documentSchema.parse(...)` call (the parse is now a pure v6 validation
+// `documentSchema.parse(...)` call (the parse is now a pure current-schema validation
 // step — see the comment above `documentSchema` below). It does NOT touch v2
 // (still handled solely by the separate `migrateProjectDataToAxcutDocument`
 // pure function) or reject unknown versions; anything that isn't exactly v3
@@ -771,6 +910,19 @@ export function upgradeV6DocumentToV7(raw: unknown): unknown {
 	return { ...doc, schemaVersion: 7, timeline: { ...timeline, trimRanges: anchored } };
 }
 
+/** v7 → v8 adds only optional, empty artwork collections. */
+export function upgradeV7DocumentToV8(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const doc = raw as Record<string, unknown>;
+	if (doc.schemaVersion !== 7) return raw;
+	return {
+		...doc,
+		schemaVersion: 8,
+		artworkAssets: Array.isArray(doc.artworkAssets) ? doc.artworkAssets : [],
+		artworkDesigns: Array.isArray(doc.artworkDesigns) ? doc.artworkDesigns : [],
+	};
+}
+
 /**
  * Runs the whole upgrade chain on a raw, untrusted value. Idempotent: each step
  * is gated on an exact `schemaVersion`, so an already-current document passes
@@ -782,8 +934,8 @@ export function upgradeV6DocumentToV7(raw: unknown): unknown {
  * not configure for the main bundle. Keep this module alias-free.
  */
 export function migrateRawDocumentToCurrent(raw: unknown): unknown {
-	return upgradeV6DocumentToV7(
-		upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw))),
+	return upgradeV7DocumentToV8(
+		upgradeV6DocumentToV7(upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw)))),
 	);
 }
 
@@ -943,6 +1095,13 @@ export type AxcutAnnotationRegion = z.infer<typeof annotationRegionSchema>;
 export type AxcutZoomRegion = z.infer<typeof zoomRegionSchema>;
 export type AxcutCameraTrack = z.infer<typeof cameraTrackSchema>;
 export type AxcutLegacyEditor = z.infer<typeof legacyEditorSchema>;
+export type ManagedMediaImport = z.infer<typeof managedMediaImportSchema>;
+export type MediaProbe = z.infer<typeof mediaProbeSchema>;
+export type ArtworkAsset = z.infer<typeof artworkAssetSchema>;
+export type ArtworkLayer = z.infer<typeof artworkLayerSchema>;
+export type ArtworkTextLayer = z.infer<typeof artworkTextLayerSchema>;
+export type ArtworkImageLayer = z.infer<typeof artworkImageLayerSchema>;
+export type ArtworkDesign = z.infer<typeof artworkDesignSchema>;
 export type AxcutDocument = z.infer<typeof documentSchema>;
 export type AxcutDocumentInput = z.input<typeof documentSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
@@ -977,6 +1136,8 @@ export function createEmptyDocument(
 		},
 		annotations: [],
 		zoomRanges: [],
+		artworkAssets: [],
+		artworkDesigns: [],
 		legacyEditor: null,
 	});
 }

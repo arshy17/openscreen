@@ -95,6 +95,7 @@
 		"modes": {
 			"media": "Media",
 			"edit": "Edit",
+			"artwork": "Artwork",
 			"rec": "Rec"
 		}
 	},

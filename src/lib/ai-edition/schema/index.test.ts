@@ -15,9 +15,9 @@ import {
 	zoomRegionSchema,
 } from "./index";
 
-describe("axcut-schema v7", () => {
-	it("uses schema version 7", () => {
-		expect(axcutSchemaVersion).toBe(7);
+describe("axcut-schema v8", () => {
+	it("uses schema version 8", () => {
+		expect(axcutSchemaVersion).toBe(8);
 	});
 
 	it("rejects unknown schema versions", () => {
@@ -29,9 +29,9 @@ describe("axcut-schema v7", () => {
 		).toThrow();
 	});
 
-	it("createEmptyDocument returns a valid v7 doc with empty collections", () => {
+	it("createEmptyDocument returns a valid v8 doc with empty collections", () => {
 		const doc = createEmptyDocument({ projectId: "proj_1", title: "Demo" });
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect(doc.assets).toEqual([]);
 		expect(doc.timeline.clips).toEqual([]);
 		expect(doc.timeline.trimRanges).toEqual([]);
@@ -41,6 +41,8 @@ describe("axcut-schema v7", () => {
 		expect(doc.annotations).toEqual([]);
 		expect(doc.zoomRanges).toEqual([]);
 		expect(doc.transcripts).toEqual([]);
+		expect(doc.artworkAssets).toEqual([]);
+		expect(doc.artworkDesigns).toEqual([]);
 		expect(doc.legacyEditor).toBeNull();
 	});
 
@@ -265,7 +267,7 @@ describe("axcut-schema v7", () => {
 					v3Doc({ project: { ...v3Doc().project, primaryAssetId: "asset_2" } }),
 				),
 			);
-			expect(doc.schemaVersion).toBe(7);
+			expect(doc.schemaVersion).toBe(8);
 			expect((doc as Record<string, unknown>).cameraTrack).toBeUndefined();
 			expect(doc.assets.find((a) => a.id === "asset_1")?.cameraTrack).toBeNull();
 			expect(doc.assets.find((a) => a.id === "asset_2")?.cameraTrack?.sourcePath).toBe("/cam.mp4");
@@ -279,7 +281,7 @@ describe("axcut-schema v7", () => {
 
 		it("is a no-op when the v3 document has no legacy cameraTrack", () => {
 			const doc = documentSchema.parse(migrateRawDocumentToCurrent(v3Doc({ cameraTrack: null })));
-			expect(doc.schemaVersion).toBe(7);
+			expect(doc.schemaVersion).toBe(8);
 			for (const asset of doc.assets) {
 				expect(asset.cameraTrack).toBeNull();
 			}
@@ -425,7 +427,7 @@ describe("v4 -> v5 clip-anchored modifier migration", () => {
 				}),
 			),
 		);
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect(doc.zoomRanges).toHaveLength(1);
 		const z = doc.zoomRanges[0];
 		expect(z).toMatchObject({ id: "z1", clipId: "clip_a", depth: 3 });
@@ -562,7 +564,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				}),
 			),
 		);
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("16:9");
 	});
 
@@ -619,7 +621,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				legacyEditor: { aspectRatio: "native" },
 			}),
 		);
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("9:16");
 	});
 
@@ -630,7 +632,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		const doc = documentSchema.parse(
 			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "native" } })),
 		);
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("native");
 	});
 
@@ -638,7 +640,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		const doc = documentSchema.parse(
 			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "4:5" } })),
 		);
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("4:5");
 	});
 
@@ -646,7 +648,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		const doc = documentSchema.parse(
 			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { someOtherField: "preserved" } })),
 		);
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		const legacy = doc.legacyEditor as Record<string, unknown>;
 		expect(legacy.someOtherField).toBe("preserved");
 		expect(legacy.aspectRatio).toBeUndefined();
@@ -655,7 +657,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 	it("passes through a v5 doc with no legacyEditor at all (only the version bumps)", () => {
 		const v5 = makeV5Doc();
 		const doc = documentSchema.parse(migrateRawDocumentToCurrent(v5));
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect(doc.legacyEditor).toBeNull();
 	});
 
@@ -709,7 +711,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				legacyEditor: { aspectRatio: "native" },
 			}),
 		);
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("native");
 	});
 
@@ -751,7 +753,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				legacyEditor: { aspectRatio: "native" },
 			}),
 		);
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("9:16");
 	});
 
@@ -795,7 +797,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				legacyEditor: { aspectRatio: "native" },
 			}),
 		);
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("8:9");
 	});
 });
@@ -865,7 +867,7 @@ describe("v6 -> v7 trim clip-anchor migration", () => {
 				[{ id: "t1", assetId: "asset_1", startSec: 3, endSec: 5, origin: "user", reason: "" }],
 			),
 		);
-		expect((out as Record<string, unknown>).schemaVersion).toBe(7);
+		expect((out as Record<string, unknown>).schemaVersion).toBe(8);
 		expect(trimsOf(out)).toEqual([
 			{
 				id: "t1",

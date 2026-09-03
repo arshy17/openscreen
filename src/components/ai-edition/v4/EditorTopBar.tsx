@@ -20,7 +20,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { getAvailableLocales, getLocaleName, getLocaleShort } from "@/i18n/loader";
 import styles from "./EditorShellV4.module.css";
 
-export type EditorMode = "media" | "edit" | "rec";
+export type EditorMode = "media" | "edit" | "artwork" | "rec";
 
 export interface TopBarActions {
 	openProject: () => void;
@@ -48,6 +48,7 @@ interface EditorTopBarProps {
 const MODES: Array<{ id: EditorMode; labelKey: string }> = [
 	{ id: "media", labelKey: "topbar.modes.media" },
 	{ id: "edit", labelKey: "topbar.modes.edit" },
+	{ id: "artwork", labelKey: "topbar.modes.artwork" },
 	{ id: "rec", labelKey: "topbar.modes.rec" },
 ];
 

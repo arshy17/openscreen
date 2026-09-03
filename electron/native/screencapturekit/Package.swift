@@ -37,6 +37,14 @@ let package = Package(
 		.executable(
 			name: "openscreen-privacy-vision-helper",
 			targets: ["OpenScreenPrivacyVisionHelper"]
+		),
+		.executable(
+			name: "openscreen-photos-picker-helper",
+			targets: ["OpenScreenPhotosPickerHelper"]
+		),
+		.executable(
+			name: "openscreen-artwork-vision-helper",
+			targets: ["OpenScreenArtworkVisionHelper"]
 		)
 	],
 	targets: [
@@ -61,6 +69,14 @@ let package = Package(
 		.executableTarget(
 			name: "OpenScreenPrivacyVisionHelper",
 			path: "Sources/OpenScreenPrivacyVisionHelper"
+		),
+		.executableTarget(
+			name: "OpenScreenPhotosPickerHelper",
+			path: "Sources/OpenScreenPhotosPickerHelper"
+		),
+		.executableTarget(
+			name: "OpenScreenArtworkVisionHelper",
+			path: "Sources/OpenScreenArtworkVisionHelper"
 		),
 		.testTarget(
 			name: "OpenScreenCaptureCoreTests",

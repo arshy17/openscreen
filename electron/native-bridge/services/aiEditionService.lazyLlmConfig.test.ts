@@ -24,13 +24,17 @@ function storeStub(): LlmConfigStore {
 	} as unknown as LlmConfigStore;
 }
 
-function serviceWithCountingFactory(): { service: AiEditionService; builds: () => number } {
+function serviceWithCountingFactory(): {
+	service: AiEditionService;
+	builds: () => number;
+} {
 	let builds = 0;
 	const store = storeStub();
 	const options = {
 		documents: {
 			listProjects: async () => [],
 		},
+		authorizeMediaPath: () => true,
 		llmConfig: () => {
 			builds += 1;
 			return store;
@@ -78,11 +82,39 @@ describe("AiEditionService — LLM store resolution is deferred", () => {
 		} as unknown as LlmConfigStore;
 		const service = new AiEditionService({
 			documents: { listProjects: async () => [] },
+			authorizeMediaPath: () => true,
 			llmConfig: () => store,
 		} as unknown as AiEditionServiceOptions);
 
 		const snapshot = await service.llmGetSnapshot();
 		expect(snapshot.connectedProviders).toContain("openai-compatible");
 		expect(credentialReads).toBe(0);
+	});
+});
+
+describe("AiEditionService — media paths remain main-process authorised", () => {
+	it("rejects an unapproved managed import before the document service reads it", async () => {
+		let importCalls = 0;
+		const service = new AiEditionService({
+			documents: {
+				importProjectMedia: async () => {
+					importCalls += 1;
+					return { jobId: "job", items: [], errors: [] };
+				},
+			},
+			authorizeMediaPath: (_projectId, filePath) => filePath === "/approved.mov",
+			llmConfig: () => storeStub(),
+		} as unknown as AiEditionServiceOptions);
+
+		await expect(
+			service.importProjectMedia({
+				projectId: "project",
+				jobId: "job",
+				source: "files",
+				paths: ["/approved.mov", "/not-approved.mov"],
+				mediaKinds: ["video"],
+			}),
+		).rejects.toThrow("media paths have not been approved");
+		expect(importCalls).toBe(0);
 	});
 });

@@ -286,8 +286,48 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	writeExportToPath: (videoData: ArrayBuffer, filePath: string) => {
 		return ipcRenderer.invoke("write-export-to-path", videoData, filePath);
 	},
+	renderArtwork: (request: {
+		projectId: string;
+		designId: string;
+		format: "png" | "jpeg";
+		quality: number;
+		data: ArrayBuffer;
+		suggestedName: string;
+	}) => ipcRenderer.invoke("render-artwork", request),
+	createArtworkOpeningCard: (request: {
+		projectId: string;
+		designId: string;
+		durationSec: number;
+		data: ArrayBuffer;
+	}) => ipcRenderer.invoke("create-artwork-opening-card", request),
+	renderArtworkPack: (request: {
+		projectId: string;
+		designId: string;
+		outputs: Array<{ fileName: string; width: number; height: number; data: ArrayBuffer }>;
+	}) => ipcRenderer.invoke("render-artwork-pack", request),
 	openVideoFilePicker: () => {
 		return ipcRenderer.invoke("open-video-file-picker");
+	},
+	openProjectMediaPicker: (request: {
+		source: "files" | "photos";
+		mediaKinds: Array<"video" | "artwork">;
+	}) => {
+		return ipcRenderer.invoke("open-project-media-picker", request);
+	},
+	onProjectMediaImportProgress: (
+		callback: (progress: {
+			jobId: string;
+			itemIndex: number;
+			itemCount: number;
+			fileName: string;
+			phase: "checking" | "copying" | "probing" | "proxy" | "complete";
+			percent: number;
+		}) => void,
+	) => {
+		const listener = (_event: unknown, progress: Parameters<typeof callback>[0]) =>
+			callback(progress);
+		ipcRenderer.on("project-media-import-progress", listener);
+		return () => ipcRenderer.removeListener("project-media-import-progress", listener);
 	},
 	openAudioFilePicker: () => {
 		return ipcRenderer.invoke("open-audio-file-picker");

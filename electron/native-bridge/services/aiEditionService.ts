@@ -15,10 +15,21 @@ import type {
 	AiEditionLlmSnapshot,
 	AiEditionPortableProjectResult,
 	AiEditionPrivacyNameClassificationResult,
+	AiEditionProjectMediaImportRequest,
+	AiEditionProjectMediaImportResult,
 	AiEditionProjectSnapshotSummary,
 	AiEditionProjectSummary,
 	AiEditionSnapshotReason,
+	ArtworkCutoutResult,
+	ArtworkFrameCandidate,
+	ArtworkSuggestionResult,
 } from "../../../src/native/contracts";
+import {
+	captureArtworkFrame,
+	createArtworkSubjectCutout,
+	generateArtworkFrameCandidates,
+} from "../../ai-edition/artwork-service";
+import { suggestArtworkLocally } from "../../ai-edition/artwork-suggestions";
 import {
 	type CaptionTranslateSegment,
 	translateCaptionSegments,
@@ -36,9 +47,16 @@ import {
 } from "../../ai-edition/llm-provider-auth";
 import { classifyPrivacyNamesWithLocalModel } from "../../ai-edition/privacy-name-classifier";
 import { isLocalOpenAICompatible, PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
+import type { ProjectMediaImportProgress } from "../../media/projectMediaImport";
 
 export interface AiEditionServiceOptions {
 	documents: DocumentService;
+	/**
+	 * The renderer may name files, but it cannot grant itself filesystem access.
+	 * The main process owns the user-approved path set and managed-project roots,
+	 * so every path that enters a document must pass through this gate.
+	 */
+	authorizeMediaPath: (projectId: string, filePath: string) => boolean;
 	/**
 	 * A factory, not an instance: building `LlmConfigStore` does two sync
 	 * readFileSync plus a `safeStorage` decrypt, and on macOS that decrypt is
@@ -72,7 +90,12 @@ export interface AiEditionServiceOptions {
 	getContextUsage: (
 		projectId: string,
 		sessionId: string,
-	) => { usedTokens: number; budgetTokens: number; ratio: number; fillPercent: number } | null;
+	) => {
+		usedTokens: number;
+		budgetTokens: number;
+		ratio: number;
+		fillPercent: number;
+	} | null;
 	// ponytail: legacy per-batch undo retired in favor of per-message rewind.
 	// Kept on the surface for IPC compatibility; always returns success=false.
 	undoLastToolBatch: (projectId: string, sessionId: string) => AiEditionChatResult;
@@ -157,9 +180,70 @@ export class AiEditionService {
 	}
 
 	async addAsset(projectId: string, path: string, label?: string): Promise<AiEditionAssetResult> {
-		const document = await this.options.documents.addAsset(projectId, { path, label });
+		if (!this.options.authorizeMediaPath(projectId, path)) {
+			throw new Error("Media path has not been approved.");
+		}
+		const document = await this.options.documents.addAsset(projectId, {
+			path,
+			label,
+		});
 		const assetId = document.project.primaryAssetId ?? document.assets.at(-1)?.id ?? "";
 		return { assetId, document };
+	}
+
+	async importProjectMedia(
+		request: AiEditionProjectMediaImportRequest,
+		options: {
+			signal?: AbortSignal;
+			onProgress?: (progress: ProjectMediaImportProgress) => void;
+		} = {},
+	): Promise<AiEditionProjectMediaImportResult> {
+		if (
+			request.paths.some(
+				(filePath) => !this.options.authorizeMediaPath(request.projectId, filePath),
+			)
+		) {
+			throw new Error("One or more media paths have not been approved.");
+		}
+		return this.options.documents.importProjectMedia(request, options);
+	}
+
+	async generateArtworkCandidates(
+		projectId: string,
+		assetId: string,
+		count?: number,
+	): Promise<ArtworkFrameCandidate[]> {
+		return generateArtworkFrameCandidates(this.options.documents, projectId, assetId, count);
+	}
+
+	async captureArtworkFrame(
+		projectId: string,
+		assetId: string,
+		timeSec: number,
+	): Promise<ArtworkFrameCandidate> {
+		return captureArtworkFrame(this.options.documents, projectId, assetId, timeSec);
+	}
+
+	async createArtworkSubjectCutout(
+		projectId: string,
+		artworkAssetId: string,
+	): Promise<ArtworkCutoutResult> {
+		return createArtworkSubjectCutout(this.options.documents, projectId, artworkAssetId);
+	}
+
+	async suggestArtwork(projectId: string, instructions?: string): Promise<ArtworkSuggestionResult> {
+		const document = await this.options.documents.getProject(projectId);
+		const config = this.llmConfig.getConfig();
+		if (config && !isLocalOpenAICompatible(config.provider, config.baseUrl)) {
+			return {
+				success: false,
+				localOnly: true,
+				variants: [],
+				error:
+					"Artwork suggestions are local-only. Select the loopback OpenAI Compatible provider.",
+			};
+		}
+		return suggestArtworkLocally(document, config, instructions);
 	}
 
 	async removeAsset(projectId: string, assetId: string): Promise<AiEditionAssetResult> {
@@ -184,7 +268,10 @@ export class AiEditionService {
 			const document = await this.options.documents.restoreSnapshot(projectId, snapshotId);
 			return { success: true, document };
 		} catch (error) {
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	}
 
@@ -228,7 +315,10 @@ export class AiEditionService {
 			await this.llmConfig.setConfig(config);
 			return { success: true };
 		} catch (error) {
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	}
 
@@ -238,7 +328,10 @@ export class AiEditionService {
 			await this.llmConfig.setCredential(providerId, entry);
 			return { success: true };
 		} catch (error) {
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	}
 
@@ -247,7 +340,10 @@ export class AiEditionService {
 			await this.llmConfig.removeCredential(providerId);
 			return { success: true };
 		} catch (error) {
-			return { success: false, error: error instanceof Error ? error.message : String(error) };
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	}
 
@@ -294,11 +390,19 @@ export class AiEditionService {
 			}
 			if (providerId === "openai" || providerId === "openai-compatible") {
 				if (!baseUrl) return { models: [], error: "Missing base URL" };
-				return { models: await listOpenAiCompatibleModels(baseUrl, cred.value) };
+				return {
+					models: await listOpenAiCompatibleModels(baseUrl, cred.value),
+				};
 			}
-			return { models: [], error: `Provider ${providerId} does not expose a dynamic model list` };
+			return {
+				models: [],
+				error: `Provider ${providerId} does not expose a dynamic model list`,
+			};
 		} catch (error) {
-			return { models: [], error: error instanceof Error ? error.message : String(error) };
+			return {
+				models: [],
+				error: error instanceof Error ? error.message : String(error),
+			};
 		}
 	}
 
@@ -348,7 +452,10 @@ export class AiEditionService {
 	}
 
 	chatUndoLastBatch(_projectId: string, _sessionId: string): AiEditionChatResult {
-		return { success: false, error: "Per-tool-batch undo retired in favor of per-message rewind." };
+		return {
+			success: false,
+			error: "Per-tool-batch undo retired in favor of per-message rewind.",
+		};
 	}
 
 	chatRewindToMessage(

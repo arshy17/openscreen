@@ -53,6 +53,7 @@ export interface NativeBridgeContext {
 	 */
 	getNativeWindowHandle?: (sender: import("electron").WebContents) => Buffer | null;
 	getAiEditionDocuments: () => DocumentService;
+	authorizeAiEditionMediaPath: (projectId: string, filePath: string) => boolean;
 	getAiEditionLlmConfig: () => import("../ai-edition/llm-config-store").LlmConfigStore;
 	runAiEditionChat: (
 		projectId: string,
@@ -221,8 +222,10 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		getCursorCapabilities: () => cursorService.getCapabilities(),
 	});
 	const compositorViewService = new CompositorViewService();
+	const mediaImportControllers = new Map<string, AbortController>();
 	const aiEditionService = new AiEditionService({
 		documents: context.getAiEditionDocuments(),
+		authorizeMediaPath: context.authorizeAiEditionMediaPath,
 		// Passed uncalled on purpose — invoking it here would build the store (and
 		// hit the macOS Keychain) while wiring the bridge at startup.
 		llmConfig: context.getAiEditionLlmConfig,
@@ -489,6 +492,71 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									request.payload.projectId,
 									request.payload.path,
 									request.payload.label,
+								),
+							);
+						case "document.importProjectMedia": {
+							const jobId = request.payload.jobId;
+							if (mediaImportControllers.has(jobId)) {
+								return createErrorResponse(
+									requestId,
+									"INVALID_REQUEST",
+									"An import with this job id is already running.",
+								);
+							}
+							const controller = new AbortController();
+							mediaImportControllers.set(jobId, controller);
+							try {
+								const result = await aiEditionService.importProjectMedia(request.payload, {
+									signal: controller.signal,
+									onProgress: (progress) => {
+										if (!event.sender.isDestroyed()) {
+											event.sender.send("project-media-import-progress", progress);
+										}
+									},
+								});
+								return createSuccessResponse(requestId, result);
+							} finally {
+								mediaImportControllers.delete(jobId);
+							}
+						}
+						case "document.cancelProjectMediaImport": {
+							mediaImportControllers.get(request.payload.jobId)?.abort();
+							return createSuccessResponse(requestId, {
+								success: true as const,
+							});
+						}
+						case "artwork.generateCandidates":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.generateArtworkCandidates(
+									request.payload.projectId,
+									request.payload.assetId,
+									request.payload.count,
+								),
+							);
+						case "artwork.captureFrame":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.captureArtworkFrame(
+									request.payload.projectId,
+									request.payload.assetId,
+									request.payload.timeSec,
+								),
+							);
+						case "artwork.cutout":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.createArtworkSubjectCutout(
+									request.payload.projectId,
+									request.payload.artworkAssetId,
+								),
+							);
+						case "artwork.suggest":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.suggestArtwork(
+									request.payload.projectId,
+									request.payload.instructions,
 								),
 							);
 						case "document.removeAsset":

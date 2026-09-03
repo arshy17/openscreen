@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
 import { removeClip } from "../../src/lib/ai-edition/document/timeline";
@@ -23,6 +24,15 @@ import {
 	documentSchema,
 	migrateRawDocumentToCurrent,
 } from "../../src/lib/ai-edition/schema";
+import type {
+	AiEditionProjectMediaImportItem,
+	AiEditionProjectMediaImportRequest,
+	AiEditionProjectMediaImportResult,
+} from "../../src/native/contracts";
+import {
+	importManagedProjectMedia,
+	type ProjectMediaImportProgress,
+} from "../media/projectMediaImport";
 import { relinkProjectMedia } from "../media/projectMediaRelinker";
 
 const PROJECT_FILE_EXTENSION = ".openscreen";
@@ -108,10 +118,24 @@ function safeProjectId(raw: string): string {
 	return raw;
 }
 
+async function removePhotosPickerTransfer(filePath: string): Promise<void> {
+	const root = path.resolve(os.tmpdir(), "OpenScreenPhotosPicker");
+	const resolved = path.resolve(filePath);
+	const parent = path.dirname(resolved);
+	if (
+		parent === root ||
+		!resolved.startsWith(`${root}${path.sep}`) ||
+		parent === path.dirname(root)
+	) {
+		return;
+	}
+	await fs.rm(parent, { recursive: true, force: true }).catch(() => undefined);
+}
+
 // ponytail: load-time migration hook. The on-disk file may carry any supported
 // `schemaVersion` (v2 EditorProjectData handled separately by
 // `migrateProjectDataToAxcutDocument`; v3 / v4 AxcutDocuments handled here).
-// `documentSchema.parse` is now a pure v6 validator — every JSON-read path
+// `documentSchema.parse` is now a pure current-schema validator — every JSON-read path
 // (list, get, future bulk-export) must run the upgrader chain first via this
 // helper so the in-memory parse is a single `z.literal(6)` + shape check.
 // `getProject` spells the same two steps out inline because it relinks moved
@@ -159,6 +183,10 @@ export class DocumentService {
 		this.mediaRegistryDir = mediaRegistryDir;
 		this.portableProjectsRoot =
 			portableProjectsRoot ?? path.join(projectsRoot, "Portable Projects");
+	}
+
+	getManagedProjectDirectory(projectId: string): string {
+		return path.join(this.projectsRoot, safeProjectId(projectId));
 	}
 
 	async ensureProjectsDir(): Promise<void> {
@@ -443,18 +471,46 @@ export class DocumentService {
 				sha256: await hashFile(target),
 				sizeBytes: copiedStats.size,
 			});
-			copied.set(absolute, target);
-			return target;
+			// The temporary directory is renamed atomically below. Persist the FINAL
+			// location in the portable document so the bundle opens immediately after
+			// that rename instead of pointing at a now-nonexistent `.tmp-*` path.
+			const finalTarget = path.join(finalPath, "Media", bundledName);
+			copied.set(absolute, finalTarget);
+			return finalTarget;
 		};
 
 		try {
 			const assets: AxcutAsset[] = [];
 			for (const asset of document.assets) {
 				const originalPath = await copyMedia(asset.originalPath);
+				const proxyPath = asset.proxyPath ? await copyMedia(asset.proxyPath) : undefined;
 				const cameraTrack = asset.cameraTrack?.sourcePath
 					? { ...asset.cameraTrack, sourcePath: await copyMedia(asset.cameraTrack.sourcePath) }
 					: asset.cameraTrack;
-				assets.push({ ...asset, originalPath, cameraTrack });
+				assets.push({
+					...asset,
+					originalPath,
+					...(proxyPath ? { proxyPath } : {}),
+					...(asset.managedImport
+						? {
+								managedImport: {
+									...asset.managedImport,
+									managedOriginalPath: originalPath,
+								},
+							}
+						: {}),
+					cameraTrack,
+				});
+			}
+			const artworkAssets: AxcutDocument["artworkAssets"] = [];
+			for (const asset of document.artworkAssets) {
+				const bundledPath = await copyMedia(asset.path);
+				const originalPath = asset.originalPath ? await copyMedia(asset.originalPath) : undefined;
+				artworkAssets.push({
+					...asset,
+					path: bundledPath,
+					...(originalPath ? { originalPath } : {}),
+				});
 			}
 			const legacy = (document.legacyEditor as Record<string, unknown> | null) ?? {};
 			const backgroundMusicPath =
@@ -464,6 +520,7 @@ export class DocumentService {
 			const portable: AxcutDocument = {
 				...document,
 				assets,
+				artworkAssets,
 				legacyEditor: { ...legacy, ...(backgroundMusicPath ? { backgroundMusicPath } : {}) },
 			};
 			const projectPath = path.join(temporaryPath, "project.openscreen");
@@ -528,6 +585,154 @@ export class DocumentService {
 			},
 		};
 		return this.saveProject(next);
+	}
+
+	async importProjectMedia(
+		request: AiEditionProjectMediaImportRequest,
+		options: {
+			signal?: AbortSignal;
+			onProgress?: (progress: ProjectMediaImportProgress) => void;
+		} = {},
+	): Promise<AiEditionProjectMediaImportResult> {
+		let document = await this.getProject(request.projectId);
+		const items: AiEditionProjectMediaImportItem[] = [];
+		for (let index = 0; index < request.paths.length; index += 1) {
+			const sourcePath = request.paths[index];
+			try {
+				const [managed] = await importManagedProjectMedia({
+					jobId: request.jobId,
+					projectId: request.projectId,
+					projectsRoot: this.projectsRoot,
+					source: request.source,
+					paths: [sourcePath],
+					mediaKinds: request.mediaKinds,
+					signal: options.signal,
+					onProgress: (progress) =>
+						options.onProgress?.({
+							...progress,
+							itemIndex: index,
+							itemCount: request.paths.length,
+						}),
+				});
+				if (!managed)
+					throw new ProjectFileError("Import produced no managed media.", request.projectId);
+				if (managed.mediaKind === "video") {
+					const duplicate = document.assets.find(
+						(asset) => asset.managedImport?.sha256 === managed.sha256,
+					);
+					const asset: AxcutAsset =
+						duplicate ??
+						({
+							id: createId("asset"),
+							kind: "video",
+							label: path.basename(sourcePath),
+							originalPath: managed.managedPath,
+							...(managed.proxyPath ? { proxyPath: managed.proxyPath } : {}),
+							durationSec: managed.probe.durationSec,
+							sizeBytes: managed.sizeBytes,
+							video: {
+								codec: managed.probe.videoCodec,
+								width: managed.probe.width,
+								height: managed.probe.height,
+								fps: managed.probe.averageFrameRate || managed.probe.frameRate,
+							},
+							audio:
+								managed.probe.audioTrackCount > 0
+									? {
+											codec: managed.probe.audioCodecs[0] ?? "unknown",
+											sampleRate: 0,
+											channels: 0,
+										}
+									: undefined,
+							managedImport: {
+								source: request.source,
+								originalName: path.basename(sourcePath),
+								importedAt: new Date().toISOString(),
+								sha256: managed.sha256,
+								managedOriginalPath: managed.managedPath,
+								proxyStatus: managed.proxyStatus,
+								probe: managed.probe,
+							},
+							cameraTrack: null,
+						} satisfies AxcutAsset);
+					if (!duplicate) {
+						document = documentSchema.parse({
+							...document,
+							assets: [...document.assets, asset],
+							project: {
+								...document.project,
+								...(document.project.primaryAssetId ? {} : { primaryAssetId: asset.id }),
+								updatedAt: new Date().toISOString(),
+							},
+						});
+					}
+					items.push({
+						sourcePath,
+						success: true,
+						mediaKind: "video",
+						assetId: asset.id,
+						managedPath: managed.managedPath,
+						proxyPath: managed.proxyPath,
+						proxyStatus: managed.proxyStatus,
+						fingerprint: managed.sha256,
+						probe: managed.probe,
+						...(managed.proxyError
+							? { error: `Original imported; proxy failed: ${managed.proxyError}` }
+							: {}),
+					});
+				} else {
+					const duplicate = document.artworkAssets.find((asset) => asset.sha256 === managed.sha256);
+					const artworkAsset =
+						duplicate ??
+						({
+							id: createId("art"),
+							label: path.basename(sourcePath),
+							path: managed.proxyPath ?? managed.managedPath,
+							originalPath: managed.managedPath,
+							mimeType: artworkMimeType(sourcePath),
+							width: managed.probe.width,
+							height: managed.probe.height,
+							sha256: managed.sha256,
+							source: request.source,
+							createdAt: new Date().toISOString(),
+						} as const);
+					if (artworkAsset.width <= 0 || artworkAsset.height <= 0) {
+						throw new ProjectFileError(
+							`Could not read image dimensions for ${path.basename(sourcePath)}.`,
+							request.projectId,
+						);
+					}
+					if (!duplicate) {
+						document = documentSchema.parse({
+							...document,
+							artworkAssets: [...document.artworkAssets, artworkAsset],
+							project: { ...document.project, updatedAt: new Date().toISOString() },
+						});
+					}
+					items.push({
+						sourcePath,
+						success: true,
+						mediaKind: "artwork",
+						artworkAssetId: artworkAsset.id,
+						managedPath: managed.managedPath,
+						proxyStatus: "not-needed",
+						fingerprint: managed.sha256,
+						probe: managed.probe,
+					});
+				}
+			} catch (error) {
+				items.push({
+					sourcePath,
+					success: false,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				if (options.signal?.aborted) break;
+			} finally {
+				if (request.source === "photos") await removePhotosPickerTransfer(sourcePath);
+			}
+		}
+		if (items.some((item) => item.success)) document = await this.saveProject(document);
+		return { jobId: request.jobId, projectId: request.projectId, items, document };
 	}
 
 	async removeAsset(projectId: string, assetId: string): Promise<AxcutDocument> {
@@ -726,4 +931,11 @@ async function hashFile(filePath: string): Promise<string> {
 	const digest = createHash("sha256");
 	for await (const chunk of createReadStream(filePath)) digest.update(chunk as Buffer);
 	return digest.digest("hex");
+}
+
+function artworkMimeType(filePath: string): "image/heic" | "image/jpeg" | "image/png" {
+	const extension = path.extname(filePath).toLowerCase();
+	if (extension === ".png") return "image/png";
+	if (extension === ".heic" || extension === ".heif") return "image/heic";
+	return "image/jpeg";
 }

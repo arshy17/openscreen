@@ -285,6 +285,44 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
+		renderArtwork: (request: {
+			projectId: string;
+			designId: string;
+			format: "png" | "jpeg";
+			quality: number;
+			data: ArrayBuffer;
+			suggestedName: string;
+		}) => Promise<{
+			success: boolean;
+			path?: string;
+			message?: string;
+			error?: string;
+			canceled?: boolean;
+		}>;
+		createArtworkOpeningCard: (request: {
+			projectId: string;
+			designId: string;
+			durationSec: number;
+			data: ArrayBuffer;
+		}) => Promise<{
+			success: boolean;
+			path?: string;
+			durationSec?: number;
+			message?: string;
+			error?: string;
+		}>;
+		renderArtworkPack: (request: {
+			projectId: string;
+			designId: string;
+			outputs: Array<{ fileName: string; width: number; height: number; data: ArrayBuffer }>;
+		}) => Promise<{
+			success: boolean;
+			directory?: string;
+			paths?: string[];
+			message?: string;
+			error?: string;
+			canceled?: boolean;
+		}>;
 		openVideoFilePicker: () => Promise<{
 			success: boolean;
 			path?: string;
@@ -293,6 +331,27 @@ interface Window {
 			name?: string;
 			canceled?: boolean;
 		}>;
+		openProjectMediaPicker: (request: {
+			source: "files" | "photos";
+			mediaKinds: Array<"video" | "artwork">;
+		}) => Promise<{
+			success: boolean;
+			paths?: string[];
+			errors?: string[];
+			message?: string;
+			error?: string;
+			canceled?: boolean;
+		}>;
+		onProjectMediaImportProgress: (
+			callback: (progress: {
+				jobId: string;
+				itemIndex: number;
+				itemCount: number;
+				fileName: string;
+				phase: "checking" | "copying" | "probing" | "proxy" | "complete";
+				percent: number;
+			}) => void,
+		) => () => void;
 		openAudioFilePicker: () => Promise<{
 			success: boolean;
 			path?: string;

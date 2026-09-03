@@ -3,6 +3,11 @@ import { create } from "zustand";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { toastText } from "@/i18n/toastText";
 import { nativeBridgeClient } from "@/native/client";
+import type {
+	AiEditionProjectMediaImportResult,
+	AiEditionProjectMediaKind,
+	AiEditionProjectMediaSource,
+} from "@/native/contracts";
 import { type Interval, replaceTimeline as replaceTimelineOp } from "../document/timeline";
 import { type AxcutAsset, type AxcutDocument, documentSchema } from "../schema";
 import { probeVideoDimensions } from "../timeline/duration";
@@ -72,6 +77,12 @@ export interface ProjectState {
 	createProject: (title: string) => Promise<AxcutDocument>;
 	refresh: () => Promise<void>;
 	addAsset: (path: string, label?: string) => Promise<AxcutAsset | null>;
+	importProjectMedia: (
+		source: AiEditionProjectMediaSource,
+		paths: string[],
+		mediaKinds: AiEditionProjectMediaKind[],
+		jobId?: string,
+	) => Promise<AiEditionProjectMediaImportResult>;
 	removeAsset: (assetId: string) => Promise<void>;
 	/**
 	 * Write the document to disk. Resolves `true` when it took effect, `false` when it
@@ -323,6 +334,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			lastSavedAt: new Date(),
 		});
 		return addedAsset;
+	},
+
+	async importProjectMedia(source, paths, mediaKinds, requestedJobId) {
+		const { projectId, document: before } = get();
+		if (!projectId || !before) throw new Error("No project loaded");
+		const jobId = requestedJobId ?? `media-${Date.now()}-${crypto.randomUUID()}`;
+		const result = await nativeBridgeClient.aiEdition.importProjectMedia({
+			projectId,
+			jobId,
+			source,
+			paths,
+			mediaKinds,
+		});
+		if (get().projectId !== projectId) return result;
+		const document = parseDocument(result.document);
+		get().setDocument(document, { history: true, historyBase: before });
+		// The native importer already persisted the managed paths and fingerprints.
+		// Keep the user gesture undoable without pretending it still needs saving.
+		set({ dirty: false, lastSavedAt: new Date() });
+		return result;
 	},
 
 	async removeAsset(assetId) {

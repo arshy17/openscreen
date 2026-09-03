@@ -12,6 +12,7 @@ import {
 	desktopCapturer,
 	dialog,
 	ipcMain,
+	nativeImage,
 	screen,
 	shell,
 	systemPreferences,
@@ -73,6 +74,7 @@ import {
 	readCursorTelemetryFile as readCursorTelemetryFileFrom,
 } from "../media/cursorSidecar";
 import { findMediaLinksByFingerprint, registerMediaLinks } from "../media/mediaLinksRegistry";
+import { resolveMediaTool } from "../media/projectMediaImport";
 import { relinkProjectMedia } from "../media/projectMediaRelinker";
 import {
 	type LinuxCaptureSourceKind,
@@ -128,6 +130,7 @@ const ALLOWED_IMPORT_AUDIO_EXTENSIONS = new Set([
 	".ogg",
 	".opus",
 ]);
+const ALLOWED_IMPORT_ARTWORK_EXTENSIONS = new Set([".heic", ".heif", ".jpg", ".jpeg", ".png"]);
 const PREVIEW_AUDIO_DIR = path.join(app.getPath("userData"), "preview-audio");
 const nativeMacCaptureEvents = new EventEmitter();
 
@@ -1035,6 +1038,87 @@ async function findPrivacyVisionHelperPath() {
 		}
 	}
 	return null;
+}
+
+function getPhotosPickerHelperCandidates() {
+	const envPath = process.env.OPENSCREEN_PHOTOS_PICKER_EXE?.trim();
+	const archTag = process.arch === "arm64" ? "darwin-arm64" : "darwin-x64";
+	const helperName = "openscreen-photos-picker-helper";
+	return [
+		envPath,
+		resolveUnpackedAppPath("electron", "native", "screencapturekit", "build", helperName),
+		resolveUnpackedAppPath("electron", "native", "bin", archTag, helperName),
+		resolvePackagedResourcePath("electron", "native", "bin", archTag, helperName),
+	].filter((candidate): candidate is string => Boolean(candidate));
+}
+
+async function findPhotosPickerHelperPath() {
+	if (process.platform !== "darwin") return null;
+	for (const candidate of getPhotosPickerHelperCandidates()) {
+		try {
+			await fs.access(candidate, fsConstants.X_OK);
+			return candidate;
+		} catch {
+			// Try the next packaged or development helper location.
+		}
+	}
+	return null;
+}
+
+function runPhotosPickerHelper(helperPath: string): Promise<{
+	success: boolean;
+	cancelled: boolean;
+	paths: string[];
+	errors: string[];
+}> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(helperPath, [], { stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		let stderr = "";
+		const timer = setTimeout(
+			() => {
+				child.kill("SIGTERM");
+				reject(new Error("The Photos picker timed out."));
+			},
+			30 * 60 * 1000,
+		);
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout = `${stdout}${chunk.toString("utf8")}`.slice(-4 * 1024 * 1024);
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			stderr = `${stderr}${chunk.toString("utf8")}`.slice(-16 * 1024);
+		});
+		child.once("error", reject);
+		child.once("close", (code) => {
+			clearTimeout(timer);
+			if (code !== 0)
+				return reject(new Error(stderr.trim() || `Photos picker exited with ${code}.`));
+			try {
+				const parsed = JSON.parse(stdout.trim()) as {
+					success?: boolean;
+					cancelled?: boolean;
+					paths?: unknown;
+					errors?: unknown;
+				};
+				resolve({
+					success: parsed.success === true,
+					cancelled: parsed.cancelled === true,
+					paths: Array.isArray(parsed.paths)
+						? parsed.paths.filter((value): value is string => typeof value === "string")
+						: [],
+					errors: Array.isArray(parsed.errors)
+						? parsed.errors.filter((value): value is string => typeof value === "string")
+						: [],
+				});
+			} catch (error) {
+				reject(
+					new Error(
+						`Photos picker returned invalid data: ${error instanceof Error ? error.message : String(error)}`,
+					),
+				);
+			}
+		});
+	});
 }
 
 function runPrivacyVisionHelper(
@@ -3782,7 +3866,10 @@ export function registerIpcHandlers(
 		if (!parsed.success) return { success: false, error: "Invalid visual privacy scan request." };
 		const approvedPath = await approveReadableVideoPath(parsed.data.videoPath);
 		if (!approvedPath) {
-			return { success: false, error: "The selected project video is not approved or readable." };
+			return {
+				success: false,
+				error: "The selected project video is not approved or readable.",
+			};
 		}
 		const helperPath = await findPrivacyVisionHelperPath();
 		if (!helperPath) {
@@ -3898,6 +3985,272 @@ export function registerIpcHandlers(
 		}
 	});
 
+	ipcMain.handle(
+		"render-artwork",
+		async (
+			_,
+			request: {
+				projectId: string;
+				designId: string;
+				format: "png" | "jpeg";
+				quality: number;
+				data: ArrayBuffer;
+				suggestedName: string;
+			},
+		) => {
+			try {
+				const project = await aiEditionDocuments.getProject(request.projectId);
+				const design = project.artworkDesigns.find((item) => item.id === request.designId);
+				if (!design) return { success: false, message: "Artwork design not found." };
+				const buffer = Buffer.from(request.data);
+				const image = nativeImage.createFromBuffer(buffer);
+				if (image.isEmpty())
+					return {
+						success: false,
+						message: "Artwork renderer returned an invalid image.",
+					};
+				const size = image.getSize();
+				if (size.width !== design.width || size.height !== design.height) {
+					return {
+						success: false,
+						message: `Artwork size mismatch: expected ${design.width}×${design.height}, received ${size.width}×${size.height}.`,
+					};
+				}
+				const extension = request.format === "jpeg" ? "jpg" : "png";
+				const result = await showSaveDialogWithParent(
+					dialog,
+					{
+						title: "Export artwork",
+						defaultPath: `${request.suggestedName.replace(/[^A-Za-z0-9 _-]/g, "-")}.${extension}`,
+						filters: [
+							{
+								name: request.format === "jpeg" ? "JPEG image" : "PNG image",
+								extensions: [extension],
+							},
+						],
+					},
+					getMainWindow(),
+				);
+				if (result.canceled || !result.filePath) return { success: false, canceled: true };
+				const output = path.resolve(result.filePath);
+				const expectedExtension = path.extname(output).toLowerCase();
+				if (
+					(request.format === "png" && expectedExtension !== ".png") ||
+					(request.format === "jpeg" && ![".jpg", ".jpeg"].includes(expectedExtension))
+				) {
+					return {
+						success: false,
+						message: "The selected extension does not match the artwork format.",
+					};
+				}
+				await fs.writeFile(output, buffer);
+				return { success: true, path: output };
+			} catch (error) {
+				return {
+					success: false,
+					message: "Artwork export failed.",
+					error: error instanceof Error ? error.message : String(error),
+				};
+			}
+		},
+	);
+
+	ipcMain.handle(
+		"create-artwork-opening-card",
+		async (
+			_,
+			request: {
+				projectId: string;
+				designId: string;
+				durationSec: number;
+				data: ArrayBuffer;
+			},
+		) => {
+			try {
+				const project = await aiEditionDocuments.getProject(request.projectId);
+				const design = project.artworkDesigns.find((item) => item.id === request.designId);
+				if (!design) return { success: false, message: "Artwork design not found." };
+				const durationSec = Math.max(0.5, Math.min(10, request.durationSec));
+				const buffer = Buffer.from(request.data);
+				const image = nativeImage.createFromBuffer(buffer);
+				const size = image.getSize();
+				if (image.isEmpty() || size.width !== design.width || size.height !== design.height) {
+					return {
+						success: false,
+						message: "Opening-card artwork has invalid dimensions.",
+					};
+				}
+				const ffmpeg = await resolveMediaTool("ffmpeg");
+				if (!ffmpeg)
+					return {
+						success: false,
+						message: "The bundled video encoder is unavailable.",
+					};
+				const directory = path.join(
+					aiEditionDocuments.getManagedProjectDirectory(request.projectId),
+					"Media",
+					"Artwork",
+					"Cards",
+				);
+				await fs.mkdir(directory, { recursive: true });
+				const stem = `${request.designId.replace(/[^A-Za-z0-9_-]/g, "-")}-${Date.now()}`;
+				const imagePath = path.join(directory, `${stem}.png`);
+				const videoPath = path.join(directory, `${stem}.mp4`);
+				await fs.writeFile(imagePath, buffer);
+				await new Promise<void>((resolve, reject) => {
+					const child = spawn(
+						ffmpeg,
+						[
+							"-hide_banner",
+							"-loglevel",
+							"error",
+							"-y",
+							"-loop",
+							"1",
+							"-framerate",
+							"30",
+							"-i",
+							imagePath,
+							"-f",
+							"lavfi",
+							"-i",
+							"anullsrc=r=48000:cl=stereo",
+							"-t",
+							durationSec.toFixed(3),
+							"-map",
+							"0:v:0",
+							"-map",
+							"1:a:0",
+							"-c:v",
+							"h264_videotoolbox",
+							"-b:v",
+							"12M",
+							"-pix_fmt",
+							"yuv420p",
+							"-color_primaries",
+							"bt709",
+							"-color_trc",
+							"bt709",
+							"-colorspace",
+							"bt709",
+							"-c:a",
+							"aac",
+							"-shortest",
+							"-movflags",
+							"+faststart",
+							videoPath,
+						],
+						{ stdio: ["ignore", "ignore", "pipe"] },
+					);
+					let stderr = "";
+					child.stderr.on("data", (chunk: Buffer) => {
+						stderr = `${stderr}${chunk.toString("utf8")}`.slice(-16_000);
+					});
+					child.once("error", reject);
+					child.once("close", (code) =>
+						code === 0
+							? resolve()
+							: reject(new Error(stderr.trim() || "Opening-card encoding failed.")),
+					);
+				});
+				// The card belongs to the source project's managed directory, but the
+				// renderer may immediately import it into a newly-created linked project.
+				// Carry the main-process approval across that one intentional hand-off.
+				approveFilePath(videoPath);
+				return { success: true, path: videoPath, durationSec };
+			} catch (error) {
+				return {
+					success: false,
+					message: "Opening-card video could not be created.",
+					error: error instanceof Error ? error.message : String(error),
+				};
+			}
+		},
+	);
+
+	ipcMain.handle(
+		"render-artwork-pack",
+		async (
+			_,
+			request: {
+				projectId: string;
+				designId: string;
+				outputs: Array<{
+					fileName: string;
+					width: number;
+					height: number;
+					data: ArrayBuffer;
+				}>;
+			},
+		) => {
+			try {
+				const project = await aiEditionDocuments.getProject(request.projectId);
+				if (!project.artworkDesigns.some((item) => item.id === request.designId)) {
+					return { success: false, message: "Artwork design not found." };
+				}
+				const allowedSizes = new Set([
+					"3840x2160",
+					"1280x720",
+					"1080x1920",
+					"1080x1350",
+					"1080x1080",
+					"3000x3000",
+					"1200x628",
+				]);
+				if (request.outputs.length < 1 || request.outputs.length > 9) {
+					return {
+						success: false,
+						message: "An artwork pack must contain between 1 and 9 files.",
+					};
+				}
+				for (const output of request.outputs) {
+					if (!allowedSizes.has(`${output.width}x${output.height}`)) {
+						return {
+							success: false,
+							message: "Artwork pack contains an unsupported size.",
+						};
+					}
+					const image = nativeImage.createFromBuffer(Buffer.from(output.data));
+					const size = image.getSize();
+					if (image.isEmpty() || size.width !== output.width || size.height !== output.height) {
+						return {
+							success: false,
+							message: `Invalid rendered artwork: ${output.fileName}`,
+						};
+					}
+				}
+				const selected = await showOpenDialogWithParent(
+					dialog,
+					{
+						title: "Choose artwork pack folder",
+						properties: ["openDirectory", "createDirectory"],
+					},
+					getMainWindow(),
+				);
+				if (selected.canceled || !selected.filePaths[0]) return { success: false, canceled: true };
+				const directory = path.resolve(
+					selected.filePaths[0],
+					`Open Screen Artwork - ${Date.now()}`,
+				);
+				await fs.mkdir(directory, { recursive: true });
+				const paths: string[] = [];
+				for (const output of request.outputs) {
+					const fileName = `${output.fileName.replace(/[^A-Za-z0-9 _.-]/g, "-").replace(/\.\.+/g, ".")}.png`;
+					const target = path.join(directory, path.basename(fileName));
+					await fs.writeFile(target, Buffer.from(output.data));
+					paths.push(target);
+				}
+				return { success: true, directory, paths };
+			} catch (error) {
+				return {
+					success: false,
+					message: "Artwork pack export failed.",
+					error: error instanceof Error ? error.message : String(error),
+				};
+			}
+		},
+	);
+
 	ipcMain.handle("open-video-file-picker", async () => {
 		try {
 			const result = await showOpenDialogWithParent(
@@ -3946,6 +4299,92 @@ export function registerIpcHandlers(
 			};
 		}
 	});
+
+	ipcMain.handle(
+		"open-project-media-picker",
+		async (
+			_,
+			request: {
+				source?: "files" | "photos";
+				mediaKinds?: Array<"video" | "artwork">;
+			},
+		) => {
+			try {
+				const source = request?.source === "photos" ? "photos" : "files";
+				const mediaKinds = Array.isArray(request?.mediaKinds)
+					? request.mediaKinds.filter((kind) => kind === "video" || kind === "artwork")
+					: ["video" as const];
+				let selectedPaths: string[] = [];
+				let errors: string[] = [];
+				if (source === "photos") {
+					const helper = await findPhotosPickerHelperPath();
+					if (!helper) {
+						return {
+							success: false,
+							message: "Import from Photos requires the installed macOS Photos helper.",
+						};
+					}
+					const result = await runPhotosPickerHelper(helper);
+					if (result.cancelled) return { success: false, canceled: true };
+					selectedPaths = result.paths;
+					errors = result.errors;
+				} else {
+					const extensions = [
+						...(mediaKinds.includes("video")
+							? ["webm", "mp4", "mov", "avi", "mkv", "m4v", "wmv", "flv", "ts"]
+							: []),
+						...(mediaKinds.includes("artwork") ? ["heic", "heif", "jpg", "jpeg", "png"] : []),
+					];
+					const result = await showOpenDialogWithParent(
+						dialog,
+						{
+							title: mediaKinds.includes("artwork") ? "Import videos or artwork" : "Import videos",
+							defaultPath: RECORDINGS_DIR,
+							filters: [{ name: "Supported media", extensions }],
+							properties: ["openFile", "multiSelections"],
+						},
+						getMainWindow(),
+					);
+					if (result.canceled || result.filePaths.length === 0) {
+						return { success: false, canceled: true };
+					}
+					selectedPaths = result.filePaths;
+				}
+
+				const approved: string[] = [];
+				for (const selectedPath of selectedPaths) {
+					const extension = path.extname(selectedPath).toLowerCase();
+					const allowed =
+						(mediaKinds.includes("video") && ALLOWED_IMPORT_VIDEO_EXTENSIONS.has(extension)) ||
+						(mediaKinds.includes("artwork") && ALLOWED_IMPORT_ARTWORK_EXTENSIONS.has(extension));
+					if (!allowed) {
+						errors.push(`Unsupported file: ${path.basename(selectedPath)}`);
+						continue;
+					}
+					try {
+						if (!(await fs.stat(selectedPath)).isFile()) throw new Error("not a file");
+						approveFilePath(selectedPath);
+						approved.push(path.resolve(selectedPath));
+					} catch {
+						errors.push(`Unreadable file: ${path.basename(selectedPath)}`);
+					}
+				}
+				return {
+					success: approved.length > 0,
+					paths: approved,
+					errors,
+					message: approved.length === 0 ? "No supported readable media was selected." : undefined,
+				};
+			} catch (error) {
+				console.error("Failed to choose project media:", error);
+				return {
+					success: false,
+					message: "Failed to choose project media",
+					error: error instanceof Error ? error.message : String(error),
+				};
+			}
+		},
+	);
 
 	ipcMain.handle("open-audio-file-picker", async () => {
 		try {
@@ -4614,6 +5053,9 @@ export function registerIpcHandlers(
 			}
 		},
 		getAiEditionDocuments: () => aiEditionDocuments,
+		authorizeAiEditionMediaPath: (projectId, filePath) =>
+			isPathAllowed(filePath) ||
+			isPathWithinDir(filePath, aiEditionDocuments.getManagedProjectDirectory(projectId)),
 		getAiEditionLlmConfig,
 		runAiEditionChat: (projectId, sessionId, message, document, sink) =>
 			runChat(projectId, sessionId, message, getAiEditionLlmConfig(), document, sink, {

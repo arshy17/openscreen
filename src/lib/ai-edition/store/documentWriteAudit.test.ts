@@ -147,6 +147,17 @@ const DECLARED: WritePath[] = [
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	// The window is closing and the user answered "save".
 	w("src/components/ai-edition/NewEditorShell.tsx", "unsubSaveBeforeClose", "save", "gesture"),
+	// Artwork imports and design edits only persist after a user gesture. Both are
+	// one-step revisions, so the complete prior design returns on Ctrl+Z.
+	w("src/components/ai-edition/v4/ArtworkStage.tsx", "importImage", "save", "gesture"),
+	w("src/components/ai-edition/v4/ArtworkStage.tsx", "persist", "save", "gesture"),
+	w(
+		"src/components/ai-edition/v4/ArtworkStage.tsx",
+		"createOpeningCardVariant",
+		"save",
+		"automatic",
+	),
+	w("src/components/ai-edition/v4/ArtworkStage.tsx", "cutoutSelectedImage", "save", "gesture"),
 	// Auto-enhance > Quick Style: one click applies the selected creator theme as
 	// one undoable document edit (format, captions, and optional visual cues).
 	w("src/components/ai-edition/v4/V4Timeline.tsx", "runQuickCreatorStyle", "save", "gesture"),
@@ -197,6 +208,9 @@ const DECLARED: WritePath[] = [
 	// Linking the camera track found next to a newly added asset. Part of the
 	// import, not an edit of its own.
 	w("src/lib/ai-edition/store/projectStore.ts", "addAsset", "save", "automatic"),
+	// Import from Files/Photos is one user gesture. The native service has already
+	// persisted the managed copies, and this store install records the undo point.
+	w("src/lib/ai-edition/store/projectStore.ts", "importProjectMedia", "set", "gesture"),
 	// THE round-3 fix. This is the shape that defeated round 2: a store action that
 	// writes on someone else's behalf. It forwards now, so its callers decide.
 	w("src/lib/ai-edition/store/projectStore.ts", "replaceTimeline", "save", "forwarded"),

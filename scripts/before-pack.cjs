@@ -131,6 +131,36 @@ const MAC_REQUIRED = [
 		breaks: "face and sensitive on-screen text review is unavailable",
 		fix: "Build it with:\n\n    npm run build:native:mac",
 	},
+	{
+		match: (name) => name === "openscreen-photos-picker-helper",
+		what: "the user-selected Photos import helper",
+		breaks: "Import from Photos is unavailable",
+		fix: "Build it with:\n\n    npm run build:native:mac",
+	},
+	{
+		match: (name) => name === "openscreen-artwork-vision-helper",
+		what: "the local Vision artwork frame-ranking helper",
+		breaks: "sharpness, face visibility and text-space frame suggestions are unavailable",
+		fix: "Build it with:\n\n    npm run build:native:mac",
+	},
+	{
+		match: (name) => name === "ffmpeg",
+		what: "the LGPL media proxy and artwork frame extractor",
+		breaks: "iPhone proxies, HEIC conversion and video-frame artwork capture are unavailable",
+		fix: "Build it with:\n\n    npm run build:native:compositor:mac",
+	},
+	{
+		match: (name) => name === "ffprobe",
+		what: "the LGPL managed-import media inspector",
+		breaks: "iPhone imports cannot validate codec, orientation, HDR, audio tracks or duration",
+		fix: "Build it with:\n\n    npm run build:native:compositor:mac",
+	},
+	{
+		match: (name) => name === "libavdevice.62.dylib",
+		what: "the ffmpeg CLI device dependency",
+		breaks: "bundled ffmpeg exits in dyld before proxy or artwork generation starts",
+		fix: "Build it with:\n\n    npm run build:native:compositor:mac",
+	},
 ];
 
 /**

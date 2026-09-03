@@ -262,6 +262,74 @@ export interface AiEditionPortableProjectResult {
 	manifestPath: string;
 }
 
+export type AiEditionProjectMediaSource = "files" | "photos";
+export type AiEditionProjectMediaKind = "video" | "artwork";
+
+export interface AiEditionProjectMediaImportRequest {
+	projectId: string;
+	jobId: string;
+	source: AiEditionProjectMediaSource;
+	paths: string[];
+	mediaKinds: AiEditionProjectMediaKind[];
+}
+
+export interface AiEditionProjectMediaImportItem {
+	sourcePath: string;
+	success: boolean;
+	mediaKind?: AiEditionProjectMediaKind;
+	assetId?: string;
+	artworkAssetId?: string;
+	managedPath?: string;
+	proxyPath?: string;
+	proxyStatus?: "not-needed" | "ready" | "failed" | "cancelled";
+	fingerprint?: string;
+	probe?: import("../lib/ai-edition/schema").MediaProbe;
+	error?: string;
+}
+
+export interface AiEditionProjectMediaImportResult {
+	jobId: string;
+	projectId: string;
+	items: AiEditionProjectMediaImportItem[];
+	document: unknown;
+}
+
+export interface ArtworkFrameCandidate {
+	id: string;
+	assetId: string;
+	timeSec: number;
+	path: string;
+	width: number;
+	height: number;
+	sharpness: number;
+	exposure: number;
+	faceVisibility: number;
+	textSpace: number;
+	score: number;
+}
+
+export interface ArtworkSuggestionVariant {
+	id: string;
+	headline: string;
+	subtitle?: string;
+	layout: "subject-left" | "subject-right" | "centered";
+	accentColor: string;
+	evidence: string;
+	confidence: number;
+}
+
+export interface ArtworkSuggestionResult {
+	success: boolean;
+	localOnly: true;
+	model?: string;
+	variants: ArtworkSuggestionVariant[];
+	error?: string;
+}
+
+export interface ArtworkCutoutResult {
+	path: string;
+}
+
 export interface AiEditionLlmConfig {
 	provider: string;
 	model: string;
@@ -558,6 +626,42 @@ export type NativeBridgeRequest =
 			domain: "aiEdition";
 			action: "document.addAsset";
 			payload: { projectId: string; path: string; label?: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.importProjectMedia";
+			payload: AiEditionProjectMediaImportRequest;
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.cancelProjectMediaImport";
+			payload: { jobId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "artwork.generateCandidates";
+			payload: { projectId: string; assetId: string; count?: number };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "artwork.captureFrame";
+			payload: { projectId: string; assetId: string; timeSec: number };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "artwork.suggest";
+			payload: { projectId: string; instructions?: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "artwork.cutout";
+			payload: { projectId: string; artworkAssetId: string };
 			requestId?: string;
 	  }
 	| {

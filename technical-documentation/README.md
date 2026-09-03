@@ -29,6 +29,7 @@ who reads and writes the project document.
 | [ai-agent.md](architecture/ai-agent.md) | The optional agent: tool loop, checkpoints, context management |
 | [llm-providers.md](architecture/llm-providers.md) | Provider registry, auth modes, credential storage |
 | [native-bridge.md](architecture/native-bridge.md) | The renderer ↔ main-process contract every native capability goes through |
+| [iphone-import-and-artwork.md](architecture/iphone-import-and-artwork.md) | Managed iPhone/Photos import, editing proxies, Artwork Studio, local Vision and platform packs |
 | [decisions.md](architecture/decisions.md) | **The decision ledger** — what is settled, what was rejected and why |
 
 ## Engineering

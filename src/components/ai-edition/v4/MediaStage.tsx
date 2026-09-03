@@ -1,5 +1,5 @@
-import { ArrowDown, Film, Plus, RotateCw, Search, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ArrowDown, Film, FolderOpen, Images, Plus, RotateCw, Search, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import type { AxcutAsset, TranscriptLanguageCode } from "@/lib/ai-edition/schema";
@@ -17,6 +17,7 @@ import type {
 	AssetTranscriptionStatus,
 	AssetTranscriptionView,
 } from "@/lib/ai-edition/transcription/status";
+import { nativeBridgeClient } from "@/native/client";
 import { formatBytes } from "@/utils/formatBytes";
 import {
 	TranscriptionProgressBar,
@@ -56,7 +57,7 @@ export function MediaStage({
 	const { locale } = useI18n();
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
-	const addAsset = useProjectStore((s) => s.addAsset);
+	const importProjectMedia = useProjectStore((s) => s.importProjectMedia);
 	// Transcripts are produced in the background as soon as a media lands here
 	// (see transcriptionStore) — this stage only reports where each one is at,
 	// and lets the user force a re-run in another language.
@@ -65,6 +66,15 @@ export function MediaStage({
 	const transcriptionLabel = useTranscriptionLabel();
 	const [query, setQuery] = useState("");
 	const [busy, setBusy] = useState(false);
+	const [activeJobId, setActiveJobId] = useState<string | null>(null);
+	const [failedPaths, setFailedPaths] = useState<string[]>([]);
+	const [importProgress, setImportProgress] = useState<{
+		fileName: string;
+		phase: string;
+		percent: number;
+		itemIndex: number;
+		itemCount: number;
+	} | null>(null);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [detailOpen, setDetailOpen] = useState(false);
 	const [lang, setLang] = useState<TranscriptLanguageCode>("auto");
@@ -92,25 +102,61 @@ export function MediaStage({
 	const selectedBusy =
 		selectedTranscription.status === "running" || selectedTranscription.status === "queued";
 
-	const handleImport = async () => {
+	useEffect(() => {
+		return window.electronAPI?.onProjectMediaImportProgress?.((progress) => {
+			if (progress.jobId !== activeJobId) return;
+			setImportProgress(progress);
+		});
+	}, [activeJobId]);
+
+	const handleImport = async (source: "files" | "photos", retryPaths?: string[]) => {
 		if (!projectId) {
 			toast.error(t("mediaStage.openProjectFirst"));
 			return;
 		}
-		const picker = await window.electronAPI?.openVideoFilePicker();
-		if (!picker?.success || !picker.path) return;
+		const picker = retryPaths
+			? { success: true as const, paths: retryPaths }
+			: await window.electronAPI?.openProjectMediaPicker?.({ source, mediaKinds: ["video"] });
+		if (!picker?.success || !picker.paths?.length) {
+			if (picker?.message) toast.error(picker.message);
+			return;
+		}
+		const jobId = `media-${Date.now()}-${crypto.randomUUID()}`;
+		setActiveJobId(jobId);
+		setFailedPaths([]);
 		setBusy(true);
 		try {
-			const label = picker.name || basename(picker.path);
-			await addAsset(picker.path, label);
-			toast.success(t("mediaStage.added", { label }));
+			const result = await importProjectMedia(source, picker.paths, ["video"], jobId);
+			const successes = result.items.filter((item) => item.success);
+			const failures = result.items.filter((item) => !item.success);
+			setFailedPaths(failures.map((item) => item.sourcePath));
+			if (successes.length > 0) {
+				toast.success(
+					successes.length === 1
+						? t("mediaStage.added", { label: basename(successes[0].sourcePath) })
+						: `${successes.length} videos imported`,
+				);
+			}
+			if (failures.length > 0) {
+				toast.error(`${failures.length} item(s) could not be imported`, {
+					description: failures
+						.map((item) => `${basename(item.sourcePath)}: ${item.error}`)
+						.join("\n"),
+				});
+			}
 		} catch (err) {
 			toast.error(t("mediaStage.couldNotAddAsset"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
 			setBusy(false);
+			setActiveJobId(null);
+			setImportProgress(null);
 		}
+	};
+
+	const cancelImport = () => {
+		if (activeJobId) void nativeBridgeClient.aiEdition.cancelProjectMediaImport(activeJobId);
 	};
 
 	const openDetail = (asset: AxcutAsset) => {
@@ -205,15 +251,49 @@ export function MediaStage({
 						) : (
 							<div className={styles.mediaHint}>{t("mediaStage.emptyHint")}</div>
 						)}
-						<button
-							type="button"
-							className={styles.importBtn}
-							onClick={handleImport}
-							disabled={!projectId || busy}
-						>
-							<Plus size={14} />
-							{t("mediaStage.importMedia")}
-						</button>
+						<div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+							<button
+								type="button"
+								className={styles.importBtn}
+								onClick={() => void handleImport("files")}
+								disabled={!projectId || busy}
+							>
+								<FolderOpen size={14} />
+								Import from Files
+							</button>
+							<button
+								type="button"
+								className={styles.importBtn}
+								onClick={() => void handleImport("photos")}
+								disabled={!projectId || busy}
+							>
+								<Images size={14} />
+								Import from Photos
+							</button>
+							{failedPaths.length > 0 && !busy ? (
+								<button
+									type="button"
+									className={styles.importBtn}
+									onClick={() => void handleImport("files", failedPaths)}
+								>
+									<RotateCw size={14} /> Retry failed
+								</button>
+							) : null}
+						</div>
+						{busy && importProgress ? (
+							<div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+								<div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+									<span>
+										{importProgress.fileName} · {importProgress.phase} (
+										{importProgress.itemIndex + 1}/{importProgress.itemCount})
+									</span>
+									<button type="button" className={styles.ghostBtn} onClick={cancelImport}>
+										<X size={13} /> Cancel
+									</button>
+								</div>
+								<progress value={importProgress.percent} max={100} style={{ width: "100%" }} />
+							</div>
+						) : null}
 					</div>
 
 					{detailOpen && selected ? (

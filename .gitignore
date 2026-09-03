@@ -103,6 +103,7 @@ bench-frame-*.png
 
 # Accidental root-level Vite chunks from ad-hoc renderer extraction.
 /AiEditionShell-*.js
+/tsconfig.node.tsbuildinfo
 
 # POC inputs (real recordings) and outputs — big, and not source.
 poc/media/

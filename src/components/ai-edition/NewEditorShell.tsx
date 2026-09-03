@@ -50,6 +50,7 @@ import {
 import { Preview } from "./Preview";
 import type { TrimTarget } from "./RightPanes";
 import { importPendingRecording } from "./recordingImport";
+import { ArtworkStage } from "./v4/ArtworkStage";
 import v4 from "./v4/EditorShellV4.module.css";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
@@ -336,18 +337,22 @@ export function NewEditorShell() {
 
 	const videoSources = useMemo(() => {
 		if (!document) return [];
-		return document.assets.map((asset) => ({
-			id: asset.id,
-			filePath: /^(https?|blob|data):/.test(asset.originalPath) ? undefined : asset.originalPath,
-			// Real Electron assets are filesystem paths and go through toFileUrl.
-			// In the browser preview an asset can already point at an http(s)/
-			// blob/data URL served by Vite; toFileUrl would mangle those into a
-			// broken file:// URL, so pass web URLs through untouched.
-			src: /^(https?|blob|data):/.test(asset.originalPath)
-				? asset.originalPath
-				: toFileUrl(asset.originalPath),
-			label: asset.label,
-		}));
+		return document.assets.map((asset) => {
+			// Managed iPhone imports retain their original for export while the editor
+			// decodes a hardware-friendly Rec.709 proxy. Plain recordings keep using
+			// their source directly.
+			const playbackPath = asset.proxyPath ?? asset.originalPath;
+			return {
+				id: asset.id,
+				filePath: /^(https?|blob|data):/.test(playbackPath) ? undefined : playbackPath,
+				// Real Electron assets are filesystem paths and go through toFileUrl.
+				// In the browser preview an asset can already point at an http(s)/
+				// blob/data URL served by Vite; toFileUrl would mangle those into a
+				// broken file:// URL, so pass web URLs through untouched.
+				src: /^(https?|blob|data):/.test(playbackPath) ? playbackPath : toFileUrl(playbackPath),
+				label: asset.label,
+			};
+		});
 	}, [document]);
 
 	const handleLoadedMetadata = useCallback(
@@ -1149,7 +1154,8 @@ export function NewEditorShell() {
 	]);
 
 	const showTimeline = mode !== "rec";
-	const timelineRow = mode === "media" ? "188px" : `${timelineHeightPx}px`;
+	const timelineRow =
+		mode === "media" ? "188px" : mode === "artwork" ? "150px" : `${timelineHeightPx}px`;
 	const bodyColumns = mode === "edit" && chatOpen ? `${chatWidthPx}px 1fr` : "1fr";
 
 	// Drag the chat/stage divider (col-resize) or the timeline's top edge
@@ -1388,6 +1394,8 @@ export function NewEditorShell() {
 						</>
 					) : mode === "media" ? (
 						<MediaStage onAddToTimeline={handleDropAsset} />
+					) : mode === "artwork" ? (
+						<ArtworkStage />
 					) : (
 						<RecStage
 							onStartRecording={() => void handleNewRecording()}

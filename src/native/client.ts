@@ -14,9 +14,13 @@ import {
 	type AiEditionLlmSnapshot,
 	type AiEditionPortableProjectResult,
 	type AiEditionPrivacyNameClassificationResult,
+	type AiEditionProjectMediaImportRequest,
+	type AiEditionProjectMediaImportResult,
 	type AiEditionProjectSnapshotSummary,
 	type AiEditionProjectSummary,
 	type AiEditionSnapshotReason,
+	type ArtworkFrameCandidate,
+	type ArtworkSuggestionResult,
 	type CursorCapabilities,
 	type CursorRecordingData,
 	type CursorTelemetryPoint,
@@ -190,6 +194,42 @@ export const nativeBridgeClient = {
 				domain: "aiEdition",
 				action: "document.addAsset",
 				payload: { projectId, path, label },
+			}),
+		importProjectMedia: (request: AiEditionProjectMediaImportRequest) =>
+			requireNativeBridgeData<AiEditionProjectMediaImportResult>({
+				domain: "aiEdition",
+				action: "document.importProjectMedia",
+				payload: request,
+			}),
+		cancelProjectMediaImport: (jobId: string) =>
+			requireNativeBridgeData<{ success: true }>({
+				domain: "aiEdition",
+				action: "document.cancelProjectMediaImport",
+				payload: { jobId },
+			}),
+		generateArtworkCandidates: (projectId: string, assetId: string, count = 8) =>
+			requireNativeBridgeData<ArtworkFrameCandidate[]>({
+				domain: "aiEdition",
+				action: "artwork.generateCandidates",
+				payload: { projectId, assetId, count },
+			}),
+		captureArtworkFrame: (projectId: string, assetId: string, timeSec: number) =>
+			requireNativeBridgeData<ArtworkFrameCandidate>({
+				domain: "aiEdition",
+				action: "artwork.captureFrame",
+				payload: { projectId, assetId, timeSec },
+			}),
+		createArtworkSubjectCutout: (projectId: string, artworkAssetId: string) =>
+			requireNativeBridgeData<import("./contracts").ArtworkCutoutResult>({
+				domain: "aiEdition",
+				action: "artwork.cutout",
+				payload: { projectId, artworkAssetId },
+			}),
+		suggestArtwork: (projectId: string, instructions?: string) =>
+			requireNativeBridgeData<ArtworkSuggestionResult>({
+				domain: "aiEdition",
+				action: "artwork.suggest",
+				payload: { projectId, instructions },
 			}),
 		removeAsset: (projectId: string, assetId: string) =>
 			requireNativeBridgeData<AiEditionAssetResult>({

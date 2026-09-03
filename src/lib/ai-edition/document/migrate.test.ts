@@ -49,7 +49,7 @@ describe("migrateProjectDataToAxcutDocument", () => {
 	it("produces a current-schema document with one asset and one clip from a v2 single-recording project", () => {
 		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
 
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect(doc.assets).toHaveLength(1);
 		const asset = doc.assets[0];
 		expect(asset.kind).toBe("video");
@@ -349,7 +349,7 @@ describe("migrateAxcutDocumentToProjectData", () => {
 // run on every `documentSchema.parse(...)` call site. The pre-hoist chain ran
 // v3→v4 and v4→v5 on every parse, including in-memory parses that were
 // already v5; the post-hoist chain runs once at the disk (or localStorage)
-// read site, and the in-memory `documentSchema.parse` is a pure v6 validator.
+// read site, and the in-memory `documentSchema.parse` is a pure current-schema validator.
 
 describe("migrateRawDocumentToCurrent", () => {
 	const createdAt = "2024-01-01T00:00:00.000Z";
@@ -407,7 +407,7 @@ describe("migrateRawDocumentToCurrent", () => {
 				}),
 			),
 		);
-		expect(migrated.schemaVersion).toBe(7);
+		expect(migrated.schemaVersion).toBe(8);
 		expect((migrated as Record<string, unknown>).cameraTrack).toBeUndefined();
 		expect(migrated.assets[0].cameraTrack).toBeNull();
 		expect(migrated.assets[1].cameraTrack?.sourcePath).toBe("/cam.mp4");
@@ -421,7 +421,7 @@ describe("migrateRawDocumentToCurrent", () => {
 				],
 			}),
 		) as Record<string, unknown>;
-		expect(migrated.schemaVersion).toBe(7);
+		expect(migrated.schemaVersion).toBe(8);
 		const zooms = migrated.zoomRanges as Array<Record<string, unknown>>;
 		expect(zooms).toHaveLength(1);
 		expect(zooms[0]).toMatchObject({ id: "z1", clipId: "c1", depth: 3 });
@@ -429,12 +429,17 @@ describe("migrateRawDocumentToCurrent", () => {
 
 	it("is a no-op for an already-current document (returns an equal value)", () => {
 		const v5 = makeV4Doc(); // makeV4Doc's body is the v5-compatible shape
-		const once = migrateRawDocumentToCurrent({ ...v5, schemaVersion: 7 });
+		const once = migrateRawDocumentToCurrent({
+			...v5,
+			schemaVersion: 8,
+			artworkAssets: [],
+			artworkDesigns: [],
+		});
 		// ponytail: the upgrader chain checks schemaVersion and returns the input
 		// unchanged, so the round-trip allocation is bounded to a property
 		// comparison per upgrader — the same per-parse overhead the old
 		// `z.preprocess` carried.
-		expect(once).toEqual({ ...v5, schemaVersion: 7 });
+		expect(once).toEqual({ ...v5, schemaVersion: 8, artworkAssets: [], artworkDesigns: [] });
 	});
 
 	it("passes non-document input through unchanged (the schema is the gate, not this helper)", () => {
@@ -459,7 +464,7 @@ describe("migrateRawDocumentToCurrent", () => {
 
 	it("the upgraded v5 result round-trips through documentSchema.parse with no error", () => {
 		// The whole point of the hoist: after `migrateRawDocumentToCurrent`
-		// runs once at load, the in-memory parse is a pure v6 validation
+		// runs once at load, the in-memory parse is a pure current-schema validation
 		// step. This is the contract every load site relies on.
 		const upgraded = migrateRawDocumentToCurrent(
 			makeV3Doc({

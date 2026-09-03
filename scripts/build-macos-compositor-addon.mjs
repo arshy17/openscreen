@@ -165,7 +165,10 @@ function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 		throw new Error(`${nodePath} links no ffmpeg dylib — nothing to vendor, which is wrong.`);
 	}
 
-	const names = linked.map((p) => path.basename(p));
+	const names = fs
+		.readdirSync(libDir)
+		.filter((name) => /^lib(av|sw)\w+\.\d+\.dylib$/.test(name))
+		.sort();
 	for (const name of names) {
 		const from = path.join(libDir, name);
 		if (!fs.existsSync(from)) {
@@ -176,8 +179,17 @@ function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 		fs.chmodSync(to, 0o755);
 		execFileSync("install_name_tool", ["-id", `@rpath/${name}`, to]);
 	}
-	// Inter-library references, and the addon's own.
-	for (const target of [...names.map((n) => path.join(outDir, n)), nodePath]) {
+	const commandPaths = ["ffmpeg", "ffprobe"].map((name) => {
+		const from = path.join(ffmpegDir, "bin", name);
+		if (!fs.existsSync(from)) throw new Error(`Missing required media command: ${from}`);
+		const to = path.join(outDir, name);
+		fs.copyFileSync(from, to);
+		fs.chmodSync(to, 0o755);
+		return to;
+	});
+	// Inter-library references, the addon's own, and the CLI tools used by
+	// managed iPhone imports/proxy generation/frame capture.
+	for (const target of [...names.map((n) => path.join(outDir, n)), nodePath, ...commandPaths]) {
 		const deps = execFileSync("otool", ["-L", target], { encoding: "utf8" })
 			.split("\n")
 			.map((line) => line.trim().split(" ")[0])
@@ -220,7 +232,7 @@ function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 		);
 	};
 
-	for (const file of [nodePath, ...names.map((n) => path.join(outDir, n))]) {
+	for (const file of [nodePath, ...names.map((n) => path.join(outDir, n)), ...commandPaths]) {
 		const remaining = absolutePaths(file);
 		if (remaining.length > 0) {
 			throw new Error(
@@ -229,7 +241,9 @@ function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 			);
 		}
 	}
-	console.log(`Vendored ${names.length} ffmpeg dylibs next to ${path.basename(nodePath)}`);
+	console.log(
+		`Vendored ${names.length} ffmpeg dylibs plus ffmpeg/ffprobe next to ${path.basename(nodePath)}`,
+	);
 	console.log(`No absolute build-machine paths remain in ${path.basename(nodePath)} or its dylibs`);
 }
 

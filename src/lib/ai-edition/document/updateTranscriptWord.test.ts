@@ -5,7 +5,7 @@ import { updateTranscriptWordText } from "./updateTranscriptWord";
 
 function document(): AxcutDocument {
 	return {
-		schemaVersion: 7,
+		schemaVersion: 8,
 		project: {
 			id: "project_1",
 			title: "Transcript edit",

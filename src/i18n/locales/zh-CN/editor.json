@@ -95,6 +95,7 @@
 		"modes": {
 			"media": "媒体",
 			"edit": "编辑",
+			"artwork": "封面",
 			"rec": "录制"
 		}
 	},

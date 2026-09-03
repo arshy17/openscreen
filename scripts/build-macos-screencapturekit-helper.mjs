@@ -16,12 +16,16 @@ const root = path.resolve(__dirname, "..");
 const helperName = "openscreen-screencapturekit-helper";
 const cursorHelperName = "openscreen-macos-cursor-helper";
 const privacyHelperName = "openscreen-privacy-vision-helper";
+const photosPickerHelperName = "openscreen-photos-picker-helper";
+const artworkVisionHelperName = "openscreen-artwork-vision-helper";
 const packageDir = path.join(root, "electron", "native", "screencapturekit");
 const buildDir = path.join(packageDir, "build");
 const swiftBuildDir = path.join(buildDir, "swiftpm");
 const localHelperPath = path.join(buildDir, helperName);
 const localCursorHelperPath = path.join(buildDir, cursorHelperName);
 const localPrivacyHelperPath = path.join(buildDir, privacyHelperName);
+const localPhotosPickerHelperPath = path.join(buildDir, photosPickerHelperName);
+const localArtworkVisionHelperPath = path.join(buildDir, artworkVisionHelperName);
 
 // Build a separate single-arch binary per requested arch and place each in its own
 // electron/native/bin/darwin-<arch> folder (the runtime resolves that folder by the running app's
@@ -138,6 +142,8 @@ for (const { swift, tag } of archs) {
 		[helperName, localHelperPath],
 		[cursorHelperName, localCursorHelperPath],
 		[privacyHelperName, localPrivacyHelperPath],
+		[photosPickerHelperName, localPhotosPickerHelperPath],
+		[artworkVisionHelperName, localArtworkVisionHelperPath],
 	]) {
 		const exe = findExecutable(archBuildDir, swift, name);
 		if (!exe) {

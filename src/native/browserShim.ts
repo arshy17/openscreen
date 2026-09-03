@@ -172,6 +172,8 @@ function createShimElectronAPI() {
 	return {
 		assetBaseUrl: "",
 		openVideoFilePicker: pickVideoFileViaInput,
+		openProjectMediaPicker: () => Promise.resolve({ success: false, canceled: true }),
+		onProjectMediaImportProgress: () => () => undefined,
 		openAudioFilePicker: pickAudioFileViaInput,
 		analyzePrivacyVision: () =>
 			Promise.resolve({
@@ -182,6 +184,10 @@ function createShimElectronAPI() {
 		openProjectFile: () => Promise.resolve({ success: false, canceled: true }),
 		pickExportSavePath: () => Promise.resolve({ success: false, canceled: true }),
 		writeExportToPath: () => Promise.resolve({ success: false }),
+		renderArtwork: () => Promise.resolve({ success: false, canceled: true }),
+		createArtworkOpeningCard: () =>
+			Promise.resolve({ success: false, message: "Requires the installed macOS app." }),
+		renderArtworkPack: () => Promise.resolve({ success: false, canceled: true }),
 		getCurrentRecordingSession: () => Promise.resolve({ success: false, session: null }),
 		switchToHud: () => Promise.resolve({ success: true }),
 		switchToEditor: () => Promise.resolve({ success: true }),

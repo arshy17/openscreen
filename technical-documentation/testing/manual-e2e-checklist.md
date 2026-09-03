@@ -458,6 +458,18 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 - [ ] At 1280×720 and the current Retina workspace, open every creator panel and popover, scroll every section, and verify the titlebar, top-left controls, preview-side Add Media controls, timeline, and actions remain reachable without overlap.
 - [ ] Submit a restrained local-Qwen Creator Edit request. Verify schema-valid proposals only, revision/evidence/confidence display, per-operation deselection, zero writes before approval, stale-plan rejection, one undoable apply, exact undo restoration, and deterministic/manual fallback with the model unavailable.
 
+## iPhone import and Artwork Studio — 1.10.1-beta.2
+
+- [ ] Import multiple H.264 SDR, HEVC, ProRes, portrait, 4K60, VFR, HDR/Dolby Vision, slow-motion, silent, and multi-audio-track iPhone fixtures through Files. Verify probe metadata, orientation, proxy policy, progress, cancellation, partial failure, disk warning, duplicate detection, and unchanged original SHA-256.
+- [ ] Import video and images through the macOS Photos picker. Verify the helper exposes only selected items, handles an unavailable iCloud original, and removes its temporary transfer after the managed copy is complete.
+- [ ] Scrub and edit from generated proxies, then export from the originals. Require aligned duration/framing, visibly correct Rec.709 tone mapping, smooth warm seeking, and no proxy path in the final master.
+- [ ] Save/reopen, Collect Media, move/relink, and recover a project containing managed originals, proxies, artwork sources, cutouts, frame captures, and designs; verify all checksums.
+- [ ] Create and revise multiple designs. Exercise text, imported/captured image, Apple Vision subject cutout, shape, icon, crop, fit, blur, rotation, opacity, safe areas, guides, undo/redo, duplication, and canvas/phone/feed/search previews.
+- [ ] Ask local Qwen for three artwork proposals and confirm schema-valid evidence/confidence, zero network requests, no document write before Apply, and one reversible design revision after approval. Repeat with the model unavailable and confirm deterministic local fallback.
+- [ ] Export PNG, JPEG, and the full platform pack. Probe every file for exact preset dimensions, compare repeated PNG hashes, verify transparent cutout PNG and JPEG quality, and inspect text-overflow/contrast warnings.
+- [ ] Add an artwork design as a 1–3 second opening card. Confirm a separate linked project is created, its H.264/AAC card leads the video, original modifiers remain aligned, and the source project hash does not change.
+- [ ] At 1280×720 and the current Retina workspace, open Artwork Studio, every panel and each mock preview. Verify no titlebar overlap, unreachable controls, horizontal overflow, or hidden export/import action.
+
 ## Results log
 
 | Date | Build / tag | Platform | Pass/fail | Notes |

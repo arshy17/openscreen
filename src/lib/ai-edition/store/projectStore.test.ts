@@ -36,13 +36,13 @@ vi.mock("sonner", () => ({
 const sampleDoc = {
 	// ponytail: the bridge contract after the migration hoist is v6 — every
 	// load site (DocumentService, browserShim) runs `migrateRawDocumentToCurrent`
-	// before returning, and the renderer's `parseDocument` is a pure v6
+	// before returning, and the renderer's `parseDocument` is a pure current-schema
 	// validator. Test fixtures model the post-hoist contract.
 	// `as const` and not a bare 7: the document type pins this field to the
 	// LITERAL 7, and an unannotated object literal widens it to `number` — so
 	// every `document: sampleDoc` below fails to type-check for a fixture that
 	// is, in fact, exactly right.
-	schemaVersion: 7 as const,
+	schemaVersion: 8 as const,
 	project: {
 		id: "proj_test",
 		title: "Test",
