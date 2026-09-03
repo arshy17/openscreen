@@ -138,18 +138,43 @@ struct ReadbackRing {
 /// Trois cibles R8Unorm plutot qu'une seule : Y est en pleine resolution et U/V
 /// en demie (4:2:0), et wgpu ne sait pas ecrire des attachements de tailles
 /// differentes dans une meme passe.
+/// Disposition de la chrominance. PAS un gout : une consequence de l'encodeur
+/// qui va consommer la frame. `libopenh264` n'accepte que du YUV420P planaire
+/// (ses `pix_fmts` sont yuv420p/yuvj420p), VAAPI encode depuis du NV12. Le
+/// compositeur doit donc savoir produire les deux.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum YuvFormat {
+    /// U et V dans deux plans `R8Unorm` separes.
+    I420,
+    /// U et V entrelaces dans un seul plan `Rg8Unorm`.
+    Nv12,
+}
+
+/// Les cibles de chrominance, dont la forme depend du format.
+enum Chroma {
+    Planar {
+        _u: wgpu::Texture,
+        _v: wgpu::Texture,
+        u_view: wgpu::TextureView,
+        v_view: wgpu::TextureView,
+        pipe_u: wgpu::RenderPipeline,
+        pipe_v: wgpu::RenderPipeline,
+    },
+    Interleaved {
+        _uv: wgpu::Texture,
+        uv_view: wgpu::TextureView,
+        pipe_uv: wgpu::RenderPipeline,
+    },
+}
+
 struct YuvTargets {
-    /// Gardees en vie pour leurs vues ; seules les vues servent au rendu.
+    /// Gardee en vie pour sa vue ; seule la vue sert au rendu.
     _y: wgpu::Texture,
-    _u: wgpu::Texture,
-    _v: wgpu::Texture,
     y_view: wgpu::TextureView,
-    u_view: wgpu::TextureView,
-    v_view: wgpu::TextureView,
+    chroma: Chroma,
+    fmt: YuvFormat,
     bind: wgpu::BindGroup,
     pipe_y: wgpu::RenderPipeline,
-    pipe_u: wgpu::RenderPipeline,
-    pipe_v: wgpu::RenderPipeline,
     /// Dimensions pour lesquelles tout ceci a ete construit : un resize doit
     /// tout refaire, et comparer ici est moins fragile que de s'en souvenir.
     w: u32,
@@ -159,9 +184,10 @@ struct YuvTargets {
     /// PORTENT du padding, et le lecteur doit le retirer ligne a ligne.
     bpr_y: u32,
     bpr_uv: u32,
-    /// Offsets des trois plans dans le buffer de staging unique. Alignes a 256
-    /// (exigence de `copy_texture_to_buffer`), ce que la taille du plan Y
-    /// garantit deja puisque `bpr_y` l'est.
+    /// Offsets des plans de chrominance dans le buffer de staging unique.
+    /// Alignes a 256 (exigence de `copy_texture_to_buffer`), ce que la taille du
+    /// plan Y garantit deja puisque `bpr_y` l'est. En NV12 il n'y a qu'un plan de
+    /// chrominance : `off_v` vaut alors `off_u` et ne doit pas etre lu.
     off_u: u64,
     off_v: u64,
     total: u64,
@@ -409,6 +435,11 @@ impl Compositor {
                     // `dummy_view()` est lie a la place, et la branche du shader n'est de
                     // toute facon prise que si fx.z > 0.5.
                     tex_entry(4),
+                    // Plan V. En 5 et pas en 3 : les bindings 0-4 etaient deja
+                    // pris quand le chroma est passe d'un plan entrelace a deux
+                    // plans, et renumeroter aurait touche tous les bind groups
+                    // pour un gain nul.
+                    tex_entry(5),
                 ],
             });
         let pipeline_layout = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -964,7 +995,7 @@ impl Compositor {
     unsafe fn nv12_srvs(
         &self,
         frame: *const AVFrame,
-    ) -> Result<(wgpu::TextureView, wgpu::TextureView)> {
+    ) -> Result<(wgpu::TextureView, wgpu::TextureView, wgpu::TextureView)> {
         crate::linux_frames::nv12_planes(frame)
     }
 
@@ -1107,7 +1138,7 @@ impl Compositor {
     fn make_bind(
         &self,
         cb: &LayerCB,
-        planes: Option<(&wgpu::TextureView, &wgpu::TextureView)>,
+        planes: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
         dummy: &wgpu::TextureView,
     ) -> (wgpu::Buffer, wgpu::BindGroup) {
         let uniform = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1115,7 +1146,7 @@ impl Compositor {
             contents: layer_bytes(cb),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let (y, uv) = planes.unwrap_or((dummy, dummy));
+        let (y, u, v) = planes.unwrap_or((dummy, dummy, dummy));
         // Le masque est lie sur TOUS les draws, pas seulement celui de la camera.
         // wgpu valide le bind group contre le layout : le binding 4 est declare
         // (`tex_entry(4)`), donc une entree absente ferait echouer CHAQUE draw et
@@ -1139,7 +1170,7 @@ impl Compositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(uv),
+                    resource: wgpu::BindingResource::TextureView(u),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -1148,6 +1179,10 @@ impl Compositor {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(mask_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(v),
                 },
             ],
         });
@@ -1282,7 +1317,7 @@ impl Compositor {
             ..Default::default()
         };
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), dummy);
+        let (buf, bind) = self.make_bind(&cb, Some((&view, &view, &view)), dummy);
         Ok(BgDraw { _buf: buf, _tex: Some(tex), _view: Some(view), bind })
     }
 
@@ -1404,7 +1439,8 @@ impl Compositor {
     pub unsafe fn capture_webcam_rgb(
         &self,
         wy: &wgpu::TextureView,
-        wuv: &wgpu::TextureView,
+        wu: &wgpu::TextureView,
+        wv: &wgpu::TextureView,
         src: [f32; 4],
         width: u32,
         height: u32,
@@ -1460,7 +1496,7 @@ impl Compositor {
                 mb: [1.0, 1.0, 1.0, 0.0],
                 ..Default::default()
             },
-            Some((wy, wuv)),
+            Some((wy, wu, wv)),
             &self.dummy_view(),
         );
 
@@ -1616,7 +1652,8 @@ impl Compositor {
     unsafe fn pump_segmentation(
         &self,
         wy: &wgpu::TextureView,
-        wuv: &wgpu::TextureView,
+        wu: &wgpu::TextureView,
+        wv: &wgpu::TextureView,
         valid: [f32; 2],
     ) -> Result<()> {
         if *self.seg_failed.borrow() {
@@ -1681,7 +1718,8 @@ impl Compositor {
         // `fx.xy`.
         self.capture_webcam_rgb(
             wy,
-            wuv,
+            wu,
+            wv,
             [0.0, 0.0, valid[0], valid[1]],
             crate::segmentation::MODEL_WIDTH,
             crate::segmentation::MODEL_HEIGHT,
@@ -1801,7 +1839,7 @@ impl Compositor {
         if Self::pixel_buffer_of(screen).is_none() {
             return self.clear_rt();
         }
-        let (sy, suv) = self.nv12_srvs(screen)?;
+        let (sy, su, sv) = self.nv12_srvs(screen)?;
         let (stw, sth) = self.tex_dims(screen);
         let (wtw, wth) = self.tex_dims(webcam);
         let (scw, sch) = ((*screen).width as f32, (*screen).height as f32);
@@ -1839,8 +1877,8 @@ impl Compositor {
         if wants_seg && !webcam.is_null() {
             // `nv12_srvs` dereference `data[0]` sans verifier la frame elle-meme,
             // d'ou le garde de nullite au-dessus (meme condition que le draw PiP).
-            if let Ok((wy, wuv)) = self.nv12_srvs(webcam) {
-                self.pump_segmentation(&wy, &wuv, w_valid)?;
+            if let Ok((wy, wu, wv)) = self.nv12_srvs(webcam) {
+                self.pump_segmentation(&wy, &wu, &wv, w_valid)?;
             }
         }
 
@@ -1947,7 +1985,7 @@ impl Compositor {
         // `_screen_uniform` garde le buffer uniforme en vie (reference par le bind).
         let dummy = self.dummy_view();
         let (_screen_uniform, screen_bind) =
-            self.make_bind(&screen_layer, Some((&sy, &suv)), &dummy);
+            self.make_bind(&screen_layer, Some((&sy, &su, &sv)), &dummy);
 
         // OMBRE PORTEE de l'ecran, dessinee JUSTE AVANT le calque ecran. Le shader
         // la connait depuis le debut ; ce qui manquait etait uniquement le draw
@@ -2062,7 +2100,7 @@ impl Compositor {
             scene_ref.as_ref().and_then(|s| s.webcam_effect.as_ref()),
             Some(e) if e.shader_code() == 1.0
         ) && self.webcam_mask.borrow().is_some();
-        let webcam_draw = webcam_planes.as_ref().map(|(wy, wuv)| {
+        let webcam_draw = webcam_planes.as_ref().map(|(wy, wu, wv)| {
             // COVER-CROP. `src` etait cable a [0,0,1,1], donc la texture entiere
             // etait etiree sur la boite quelle que soit sa forme : le facteur de
             // deformation valait exactement `box_ar / cam_ar`. Invisible en PiP
@@ -2113,7 +2151,7 @@ impl Compositor {
             };
             // Le masque est lie par `make_bind` sur tous les draws, pas seulement
             // celui-ci : le layout l'exige (cf. `tex_entry(4)`).
-            self.make_bind(&cb, Some((wy, wuv)), &dummy)
+            self.make_bind(&cb, Some((wy, wu, wv)), &dummy)
         });
 
         // OMBRE de la camera. Pas dans les presets « bloc » (dual-frame,
@@ -2267,7 +2305,7 @@ impl Compositor {
                         // la lit.
                         let (buf, bind) = self.make_bind(
                             &cb,
-                            Some((&self.ann_copy_view, &self.ann_copy_view)),
+                            Some((&self.ann_copy_view, &self.ann_copy_view, &self.ann_copy_view)),
                             &dummy,
                         );
                         ann_draws.push(AnnDraw::plain(buf, bind));
@@ -2327,7 +2365,7 @@ impl Compositor {
                             fx: [0.0, 0.0, 1.0, 1.0],
                             ..Default::default()
                         };
-                        let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
+                        let (buf, bind) = self.make_bind(&cb, Some((&view, &view, &view)), &dummy);
                         ann_draws.push(AnnDraw {
                             _buf: buf,
                             _glyphs: None,
@@ -2476,7 +2514,7 @@ impl Compositor {
                         };
                         // Atlas R8 au binding 1 (texY) que le mode 11 echantillonne.
                         let (buf, bind) =
-                            self.make_bind(&cb, Some((&glyphs.view, &glyphs.view)), &dummy);
+                            self.make_bind(&cb, Some((&glyphs.view, &glyphs.view, &glyphs.view)), &dummy);
                         ann_draws.push(AnnDraw {
                             _buf: buf,
                             _glyphs: Some(glyphs),
@@ -2623,7 +2661,7 @@ impl Compositor {
                 }
                 };
                 // Sprite RGBA au binding 1 (texY) que le mode 7 echantillonne.
-                let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
+                let (buf, bind) = self.make_bind(&cb, Some((&view, &view, &view)), &dummy);
                 bufs.push(buf);
                 binds.push(bind);
             }
@@ -2934,9 +2972,39 @@ impl Compositor {
 
     /// Construit (ou reconstruit apres resize) les cibles et pipelines YUV.
     fn ensure_yuv(&self) -> Result<()> {
+        // I420 par defaut : c'est le seul format que l'encodeur software sait
+        // lire, donc le seul que l'export utilise aujourd'hui.
+        self.ensure_yuv_fmt(YuvFormat::I420)
+    }
+
+    /// La disposition du buffer de staging pour un format donne, sans rien
+    /// construire. Existe pour que le test puisse verifier l'arithmetique sans
+    /// GPU — c'est elle qui doit correspondre a ce que VAAPI attend, et une
+    /// erreur d'un octet y donnerait une image decalee plutot qu'une panne.
+    pub fn yuv_layout_for(w: u32, h: u32, fmt: YuvFormat) -> (u32, u32, u64, u64) {
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+        let bpr_y = w.div_ceil(256) * 256;
+        let chroma_row_bytes = match fmt {
+            YuvFormat::I420 => cw,
+            YuvFormat::Nv12 => cw * 2,
+        };
+        let bpr_uv = chroma_row_bytes.div_ceil(256) * 256;
+        let size_y = u64::from(bpr_y) * u64::from(h);
+        let size_uv = u64::from(bpr_uv) * u64::from(ch);
+        let total = match fmt {
+            YuvFormat::I420 => size_y + 2 * size_uv,
+            YuvFormat::Nv12 => size_y + size_uv,
+        };
+        (bpr_y, bpr_uv, size_y, total)
+    }
+
+    /// Comme `ensure_yuv`, pour un format donne. Reconstruit tout si le format
+    /// change : les cibles, les pipelines et la disposition du buffer en
+    /// dependent toutes.
+    fn ensure_yuv_fmt(&self, fmt: YuvFormat) -> Result<()> {
         let (w, h) = (self.render_w, self.render_h);
         if let Some(t) = self.yuv.borrow().as_ref() {
-            if t.w == w && t.h == h {
+            if t.w == w && t.h == h && t.fmt == fmt {
                 return Ok(());
             }
         }
@@ -2945,24 +3013,21 @@ impl Compositor {
         let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
         let gpu = &self.gpu;
 
-        let mk = |label: &str, tw: u32, th: u32| {
+        let mk = |label: &str, tw: u32, th: u32, f: wgpu::TextureFormat| {
             gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
+                format: f,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             })
         };
-        let y = mk("yuv-y", w, h);
-        let u = mk("yuv-u", cw, ch);
-        let v = mk("yuv-v", cw, ch);
+        let r8 = wgpu::TextureFormat::R8Unorm;
+        let y = mk("yuv-y", w, h, r8);
         let y_view = y.create_view(&wgpu::TextureViewDescriptor::default());
-        let u_view = u.create_view(&wgpu::TextureViewDescriptor::default());
-        let v_view = v.create_view(&wgpu::TextureViewDescriptor::default());
 
         let module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("yuv"),
@@ -3011,7 +3076,7 @@ impl Compositor {
             bind_group_layouts: &[&bgl],
             push_constant_ranges: &[],
         });
-        let mk_pipe = |entry: &str, label: &str| {
+        let mk_pipe = |entry: &str, label: &str, target: wgpu::TextureFormat| {
             gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -3026,7 +3091,7 @@ impl Compositor {
                     entry_point: Some(entry),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::R8Unorm,
+                        format: target,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -3043,27 +3108,66 @@ impl Compositor {
         };
 
         let bpr_y = w.div_ceil(256) * 256;
-        let bpr_uv = cw.div_ceil(256) * 256;
+        // La LARGEUR EN OCTETS d'une ligne de chrominance, pas en texels : en NV12
+        // le plan est `Rg8Unorm`, donc 2 octets par texel. En 1080p, I420 donne
+        // 960 -> 1024 et NV12 1920 -> 2048.
+        let chroma_row_bytes = match fmt {
+            YuvFormat::I420 => cw,
+            YuvFormat::Nv12 => cw * 2,
+        };
+        let bpr_uv = chroma_row_bytes.div_ceil(256) * 256;
         let size_y = u64::from(bpr_y) * u64::from(h);
         let size_uv = u64::from(bpr_uv) * u64::from(ch);
+        let (chroma, off_v, total) = match fmt {
+            YuvFormat::I420 => {
+                let u = mk("yuv-u", cw, ch, r8);
+                let v = mk("yuv-v", cw, ch, r8);
+                let d = wgpu::TextureViewDescriptor::default();
+                let (u_view, v_view) = (u.create_view(&d), v.create_view(&d));
+                (
+                    Chroma::Planar {
+                        _u: u,
+                        _v: v,
+                        u_view,
+                        v_view,
+                        pipe_u: mk_pipe("fs_u", "yuv-u", r8),
+                        pipe_v: mk_pipe("fs_v", "yuv-v", r8),
+                    },
+                    size_y + size_uv,
+                    size_y + 2 * size_uv,
+                )
+            }
+            YuvFormat::Nv12 => {
+                let rg8 = wgpu::TextureFormat::Rg8Unorm;
+                let uv = mk("yuv-uv", cw, ch, rg8);
+                let uv_view = uv.create_view(&wgpu::TextureViewDescriptor::default());
+                (
+                    Chroma::Interleaved {
+                        _uv: uv,
+                        uv_view,
+                        pipe_uv: mk_pipe("fs_uv", "yuv-uv", rg8),
+                    },
+                    // Un seul plan de chrominance : `off_v` duplique `off_u` et
+                    // n'est jamais lu (cf. le commentaire du champ).
+                    size_y,
+                    size_y + size_uv,
+                )
+            }
+        };
         let targets = YuvTargets {
             _y: y,
-            _u: u,
-            _v: v,
             y_view,
-            u_view,
-            v_view,
+            chroma,
+            fmt,
             bind,
-            pipe_y: mk_pipe("fs_y", "yuv-y"),
-            pipe_u: mk_pipe("fs_u", "yuv-u"),
-            pipe_v: mk_pipe("fs_v", "yuv-v"),
+            pipe_y: mk_pipe("fs_y", "yuv-y", r8),
             w,
             h,
             bpr_y,
             bpr_uv,
             off_u: size_y,
-            off_v: size_y + size_uv,
-            total: size_y + 2 * size_uv,
+            off_v,
+            total,
         };
         // Les buffers de l'ancienne taille ne conviennent plus.
         self.readback_yuv.borrow_mut().free.clear();
@@ -3080,7 +3184,10 @@ impl Compositor {
     /// L'appelant recalcule ces strides depuis `w`/`h` — les depadder ici
     /// couterait une recopie de plus pour rien, l'encodeur sachant lire un
     /// `linesize`.
-    pub unsafe fn readback_submit_yuv(&self) -> Result<Option<(u32, u32, Vec<u8>)>> {
+    pub unsafe fn readback_submit_yuv<F>(&self, f: F) -> Result<bool>
+    where
+        F: FnMut(u32, u32, &[u8]) -> Result<()>,
+    {
         self.ensure_yuv()?;
         let (w, h, cw, ch, bpr_y, bpr_uv, off_u, off_v, total) = {
             let g = self.yuv.borrow();
@@ -3108,11 +3215,18 @@ impl Compositor {
         {
             let g = self.yuv.borrow();
             let t = g.as_ref().expect("ensure_yuv");
-            for (view, pipe) in [
-                (&t.y_view, &t.pipe_y),
-                (&t.u_view, &t.pipe_u),
-                (&t.v_view, &t.pipe_v),
-            ] {
+            // Une passe par plan : Y toujours, puis U et V separement (I420) ou
+            // un seul plan entrelace (NV12).
+            let mut passes: Vec<(&wgpu::TextureView, &wgpu::RenderPipeline)> =
+                vec![(&t.y_view, &t.pipe_y)];
+            match &t.chroma {
+                Chroma::Planar { u_view, v_view, pipe_u, pipe_v, .. } => {
+                    passes.push((u_view, pipe_u));
+                    passes.push((v_view, pipe_v));
+                }
+                Chroma::Interleaved { uv_view, pipe_uv, .. } => passes.push((uv_view, pipe_uv)),
+            }
+            for (view, pipe) in passes {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("yuv-plane"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3133,11 +3247,19 @@ impl Compositor {
                 pass.set_bind_group(0, &t.bind, &[]);
                 pass.draw(0..3, 0..1);
             }
-            for (tex, off, bpr, pw, ph) in [
-                (&t._y, 0u64, bpr_y, w, h),
-                (&t._u, off_u, bpr_uv, cw, ch),
-                (&t._v, off_v, bpr_uv, cw, ch),
-            ] {
+            // `pw` est en TEXELS (`copy_texture_to_buffer` veut une extent), et
+            // `bpr` en octets : en NV12 le plan de chrominance fait `cw` texels de
+            // 2 octets, d'ou le meme `cw` avec un `bpr_uv` deux fois plus grand.
+            let mut copies: Vec<(&wgpu::Texture, u64, u32, u32, u32)> =
+                vec![(&t._y, 0u64, bpr_y, w, h)];
+            match &t.chroma {
+                Chroma::Planar { _u, _v, .. } => {
+                    copies.push((_u, off_u, bpr_uv, cw, ch));
+                    copies.push((_v, off_v, bpr_uv, cw, ch));
+                }
+                Chroma::Interleaved { _uv, .. } => copies.push((_uv, off_u, bpr_uv, cw, ch)),
+            }
+            for (tex, off, bpr, pw, ph) in copies {
                 encoder.copy_texture_to_buffer(
                     wgpu::TexelCopyTextureInfo {
                         texture: tex,
@@ -3167,29 +3289,50 @@ impl Compositor {
             let mut ring = self.readback_yuv.borrow_mut();
             ring.pending.push_back(PendingCopy { buf, idx, rx, w, h, bpr: bpr_y });
             if ring.pending.len() < ring.depth {
-                return Ok(None); // amorcage, comme la ring RGBA
+                return Ok(false); // amorcage, comme la ring RGBA
             }
         }
-        self.readback_take_yuv()
+        self.readback_take_yuv_with(f)
     }
 
-    /// Recolte la plus ancienne conversion en vol. Pendant de `readback_take`.
-    pub unsafe fn readback_take_yuv(&self) -> Result<Option<(u32, u32, Vec<u8>)>> {
+    /// Recolte la plus ancienne conversion en vol et la PRESENTE au lecteur sans
+    /// la copier : `f` recoit la vue mappee telle quelle, lignes paddees a 256
+    /// comprises. Rend `false` si la ring est vide. Pendant de `readback_take`.
+    ///
+    /// POURQUOI UNE CLOSURE, ET PAS UN `Vec` RENDU. La version precedente faisait
+    /// `mapped.to_vec()` — 3,3 Mo alloues, copies puis liberes par frame, soit
+    /// 11,9 Go de va-et-vient sur un export de 3600 frames — dans le seul but que
+    /// la donnee survive a l'`unmap`. Or l'appelant la recopie immediatement dans
+    /// l'AVFrame de l'encodeur : la copie intermediaire ne servait que la
+    /// signature. Avec une closure, le lecteur travaille dans la fenetre ou le
+    /// buffer est mappe et il n'y a plus qu'une seule copie sur le chemin.
+    ///
+    /// LE SLOT EST RENDU MEME SI `f` ECHOUE. Autrement une erreur d'encodage
+    /// laisserait le buffer mappe et hors de la ring : la frame suivante en
+    /// allouerait un neuf, et ainsi de suite jusqu'a epuisement de la memoire
+    /// mappable — un mode de panne bien pire que l'erreur d'origine.
+    pub unsafe fn readback_take_yuv_with<F>(&self, mut f: F) -> Result<bool>
+    where
+        F: FnMut(u32, u32, &[u8]) -> Result<()>,
+    {
         let Some(p) = self.readback_yuv.borrow_mut().pending.pop_front() else {
-            return Ok(None);
+            return Ok(false);
         };
         self.gpu.device.poll(wgpu::Maintain::WaitForSubmissionIndex(p.idx));
         p.rx
             .recv()
             .map_err(|_| anyhow::anyhow!("map_async channel (yuv)"))?
             .map_err(|e| anyhow::anyhow!("map_async yuv: {e:?}"))?;
-        let slice = p.buf.slice(..);
-        let mapped = slice.get_mapped_range();
-        let out = mapped.to_vec();
-        drop(mapped);
+        // `mapped` et `slice` meurent a la fin du bloc : `unmap` ne peut donc pas
+        // etre appele pendant qu'une vue est encore accessible (wgpu l'assert).
+        let r = {
+            let slice = p.buf.slice(..);
+            let mapped = slice.get_mapped_range();
+            f(p.w, p.h, &mapped)
+        };
         p.buf.unmap();
         self.readback_yuv.borrow_mut().free.push(p.buf);
-        Ok(Some((p.w, p.h, out)))
+        r.map(|()| true)
     }
 
     /// Profondeur de la ring YUV. Meme role et memes raisons que
@@ -3198,7 +3341,7 @@ impl Compositor {
         let depth = depth.max(1);
         // SAFETY : meme contrat que `set_readback_depth` — le drain ne touche que
         // des buffers dont la soumission est terminee.
-        while unsafe { self.readback_take_yuv()? }.is_some() {}
+        while unsafe { self.readback_take_yuv_with(|_, _, _| Ok(()))? } {}
         let mut ring = self.readback_yuv.borrow_mut();
         ring.depth = depth;
         while ring.free.len() > depth {
@@ -3388,18 +3531,17 @@ mod tests {
         w: u32,
         h: u32,
         luma: impl Fn(u32, u32) -> u8,
-    ) -> (wgpu::TextureView, wgpu::TextureView) {
+    ) -> (wgpu::TextureView, wgpu::TextureView, wgpu::TextureView) {
         let mut y = vec![0u8; (w * h) as usize];
         for row in 0..h {
             for col in 0..w {
                 y[(row * w + col) as usize] = luma(col, row);
             }
         }
-        let (ytex, uvtex) = nv12_textures(gpu, w, h, &y, &vec![UV_NEUTRAL; (w * (h / 2)) as usize]);
-        (
-            ytex.create_view(&wgpu::TextureViewDescriptor::default()),
-            uvtex.create_view(&wgpu::TextureViewDescriptor::default()),
-        )
+        let (ytex, utex, vtex) =
+            nv12_textures(gpu, w, h, &y, &vec![UV_NEUTRAL; (w * (h / 2)) as usize]);
+        let d = wgpu::TextureViewDescriptor::default();
+        (ytex.create_view(&d), utex.create_view(&d), vtex.create_view(&d))
     }
 
     /// Le couple de textures NV12-split (Y `R8Unorm`, UV entrelacee `Rg8Unorm`)
@@ -3410,7 +3552,7 @@ mod tests {
         h: u32,
         y: &[u8],
         uv: &[u8],
-    ) -> (wgpu::Texture, wgpu::Texture) {
+    ) -> (wgpu::Texture, wgpu::Texture, wgpu::Texture) {
         let mk = |label: &str, format, tw: u32, th: u32| {
             gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -3424,7 +3566,13 @@ mod tests {
             })
         };
         let ytex = mk("test-nv12-y", wgpu::TextureFormat::R8Unorm, w, h);
-        let uvtex = mk("test-nv12-uv", wgpu::TextureFormat::Rg8Unorm, w / 2, h / 2);
+        // Les helpers de test parlent encore NV12 entrelace parce que c'est la
+        // forme lisible pour ecrire un cas ; le carrier, lui, veut deux plans.
+        // On desentrelace ici plutot que de reecrire chaque test.
+        let utex = mk("test-yuv-u", wgpu::TextureFormat::R8Unorm, w / 2, h / 2);
+        let vtex = mk("test-yuv-v", wgpu::TextureFormat::R8Unorm, w / 2, h / 2);
+        let u_plane: Vec<u8> = uv.iter().step_by(2).copied().collect();
+        let v_plane: Vec<u8> = uv.iter().skip(1).step_by(2).copied().collect();
         let write = |tex: &wgpu::Texture, data: &[u8], bpr: u32, tw: u32, th: u32| {
             gpu.context.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -3443,10 +3591,9 @@ mod tests {
             );
         };
         write(&ytex, y, w, w, h);
-        // UV : `w / 2` texels de 2 octets par ligne, soit `w` octets — la meme
-        // valeur que pour Y, par coincidence arithmetique et non par symetrie.
-        write(&uvtex, uv, w, w / 2, h / 2);
-        (ytex, uvtex)
+        write(&utex, &u_plane, w / 2, w / 2, h / 2);
+        write(&vtex, &v_plane, w / 2, w / 2, h / 2);
+        (ytex, utex, vtex)
     }
 
     /// Masque 0 sur la moitie gauche, 255 sur la droite. La frontiere tombe pile
@@ -3454,6 +3601,65 @@ mod tests {
     /// loin du degrade que le filtrage lineaire pose sur la couture.
     fn half_mask(w: u32, h: u32) -> Vec<u8> {
         (0..w * h).map(|i| if i % w < w / 2 { 0u8 } else { 255u8 }).collect()
+    }
+
+    /// Le buffer de staging exportable doit etre une VRAIE zone partagee : ce que
+    /// wgpu y ecrit, notre propre mapping doit le relire a l'identique.
+    ///
+    /// C'est le seul point reellement incertain de l'export dmabuf, et il se
+    /// verifie sans encodeur. Si ce test passe, la memoire qu'on remettra a VAAPI
+    /// est bien celle que le compositeur remplit ; s'il echoue, tout ce qui est
+    /// bati dessus produirait une image fausse plutot qu'une panne.
+    #[test]
+    fn exportable_staging_round_trips_through_wgpu() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        const N: u64 = 4096;
+        let Some(st) = comp.create_exportable_staging(N) else {
+            eprintln!("pas d'extensions de memoire externe — test saute");
+            return;
+        };
+        assert!(st.fd >= 0, "descripteur dmabuf invalide");
+        assert_eq!(st.size, N);
+
+        // Un motif non trivial : un remplissage constant passerait meme si les
+        // deux cotes regardaient deux zones differentes mais nulles.
+        let pattern: Vec<u8> = (0..N as usize).map(|i| (i * 31 + 7) as u8).collect();
+        gpu.context.write_buffer(st.buffer(), 0, &pattern);
+        gpu.context.submit(std::iter::empty());
+        gpu.device.poll(wgpu::Maintain::Wait);
+
+        let got = st.read_back().expect("read_back");
+        assert_eq!(got.len(), N as usize);
+        assert_eq!(got, pattern, "la memoire exportee ne porte pas ce que wgpu y a ecrit");
+    }
+
+    /// La disposition NV12 doit etre EXACTEMENT celle que le pilote produit pour
+    /// une image NV12 lineaire, parce que c'est elle qu'on decrira a VAAPI dans
+    /// un `AVDRMFrameDescriptor`. Les valeurs ci-dessous ne sont pas devinees :
+    /// elles ont ete relevees sur ce materiel via `vkGetImageSubresourceLayout`
+    /// d'une `VkImage` NV12 en `DRM_FORMAT_MOD_LINEAR` (Y pitch 2048, UV a
+    /// l'offset 2211840, pitch 2048, total 3317760). Un ecart d'un octet ici
+    /// donnerait une image decalee et non une panne, d'ou le test.
+    #[test]
+    fn nv12_layout_matches_what_the_driver_produces() {
+        let (bpr_y, bpr_uv, off_uv, total) =
+            Compositor::yuv_layout_for(1920, 1080, YuvFormat::Nv12);
+        assert_eq!(bpr_y, 2048, "pitch du plan Y");
+        assert_eq!(bpr_uv, 2048, "pitch du plan UV entrelace (960 texels x 2 octets)");
+        assert_eq!(off_uv, 2_211_840, "offset du plan UV");
+        assert_eq!(total, 3_317_760, "taille totale");
+    }
+
+    /// I420 reste ce qu'il etait : c'est le format que l'encodeur software lit,
+    /// et ce test est ce qui garantit qu'ajouter NV12 ne l'a pas deplace.
+    #[test]
+    fn i420_layout_is_unchanged() {
+        let (bpr_y, bpr_uv, off_u, total) =
+            Compositor::yuv_layout_for(1920, 1080, YuvFormat::I420);
+        assert_eq!((bpr_y, bpr_uv), (2048, 1024));
+        assert_eq!(off_u, 2_211_840);
+        assert_eq!(total, 2_211_840 + 2 * 1024 * 540);
     }
 
     /// Dessine UN calque plein cadre sur le RT, par-dessus `clear`, et rend le
@@ -3465,7 +3671,7 @@ mod tests {
         comp: &Compositor,
         clear: wgpu::Color,
         cb: &LayerCB,
-        planes: (&wgpu::TextureView, &wgpu::TextureView),
+        planes: (&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView),
     ) -> (u32, u32, Vec<u8>) {
         let dummy = comp.dummy_view();
         let (_buf, bind) = comp.make_bind(cb, Some(planes), &dummy);
@@ -3506,13 +3712,14 @@ mod tests {
         // Moitie gauche noire, moitie droite blanche : la capture doit rendre les
         // deux dans le bon sens. Une inversion d'axe passerait un test de taille
         // sans se voir.
-        let (y, uv) = nv12_views(&gpu, 64, 64, |col, _| if col < 32 { Y_BLACK } else { Y_WHITE });
+        let (y, u, v) = nv12_views(&gpu, 64, 64, |col, _| if col < 32 { Y_BLACK } else { Y_WHITE });
 
         let mut out = Vec::new();
         unsafe {
             comp.capture_webcam_rgb(
                 &y,
-                &uv,
+                &u,
+                &v,
                 [0.0, 0.0, 1.0, 1.0],
                 crate::segmentation::MODEL_WIDTH,
                 crate::segmentation::MODEL_HEIGHT,
@@ -3543,7 +3750,8 @@ mod tests {
         unsafe {
             comp.capture_webcam_rgb(
                 &y,
-                &uv,
+                &u,
+                &v,
                 [0.0, 0.0, 1.0, 1.0],
                 crate::segmentation::MODEL_WIDTH,
                 crate::segmentation::MODEL_HEIGHT,
@@ -3570,13 +3778,13 @@ mod tests {
     fn a_capture_whose_rows_need_padding_is_depadded_correctly() {
         let Some(gpu) = gpu() else { return };
         let comp = Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
-        let (y, uv) = nv12_views(&gpu, 64, 64, |col, _| if col < 32 { Y_BLACK } else { Y_WHITE });
+        let (y, u, v) = nv12_views(&gpu, 64, 64, |col, _| if col < 32 { Y_BLACK } else { Y_WHITE });
 
         let (w, h) = (100usize, 56usize);
         assert_ne!((w * 4) % 256, 0, "cette largeur doit justement ETRE mal alignee");
         let mut out = Vec::new();
         unsafe {
-            comp.capture_webcam_rgb(&y, &uv, [0.0, 0.0, 1.0, 1.0], w as u32, h as u32, &mut out)
+            comp.capture_webcam_rgb(&y, &u, &v, [0.0, 0.0, 1.0, 1.0], w as u32, h as u32, &mut out)
                 .expect("capture_webcam_rgb");
         }
         assert_eq!(out.len(), w * h * 3, "le padding d'alignement a fuit dans la sortie");
@@ -3597,9 +3805,9 @@ mod tests {
     fn a_capture_of_zero_size_is_refused_rather_than_rendered() {
         let Some(gpu) = gpu() else { return };
         let comp = Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
-        let (y, uv) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
+        let (y, u, v) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
         let mut out = Vec::new();
-        let r = unsafe { comp.capture_webcam_rgb(&y, &uv, [0.0, 0.0, 1.0, 1.0], 0, 144, &mut out) };
+        let r = unsafe { comp.capture_webcam_rgb(&y, &u, &v, [0.0, 0.0, 1.0, 1.0], 0, 144, &mut out) };
         assert!(r.is_err(), "une cible de largeur nulle doit etre refusee");
     }
 
@@ -3642,7 +3850,7 @@ mod tests {
         let Some(gpu) = gpu() else { return };
         let comp = Compositor::new_sized(&gpu, 64, 64).expect("Compositor::new_sized");
         comp.set_webcam_mask(&half_mask(8, 8), 8, 8).expect("set_webcam_mask");
-        let (y, uv) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
+        let (y, u, v) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
 
         // Fond bleu franc : une couleur que la camera (blanche, chroma neutre) ne
         // peut pas produire, donc « il reste du bleu » signifie « la camera a ete
@@ -3663,7 +3871,7 @@ mod tests {
                 mb: [1.0, 1.0, 1.0, 0.0],
                 ..Default::default()
             },
-            (&y, &uv),
+            (&y, &u, &v),
         );
 
         let px = |col: usize, row: usize| -> [u8; 4] {
@@ -3683,7 +3891,7 @@ mod tests {
         let Some(gpu) = gpu() else { return };
         let comp = Compositor::new_sized(&gpu, 64, 64).expect("Compositor::new_sized");
         comp.set_webcam_mask(&half_mask(8, 8), 8, 8).expect("set_webcam_mask");
-        let (y, uv) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
+        let (y, u, v) = nv12_views(&gpu, 16, 16, |_, _| Y_WHITE);
 
         let (rw, _, rgba) = draw_one_layer(
             &comp,
@@ -3700,7 +3908,7 @@ mod tests {
                 mb: [1.0, 1.0, 1.0, 0.0],
                 ..Default::default()
             },
-            (&y, &uv),
+            (&y, &u, &v),
         );
         let px = |col: usize, row: usize| -> [u8; 4] {
             let i = (row * rw as usize + col) * 4;
@@ -3739,13 +3947,14 @@ mod tests {
         }
 
         fn from_planes(gpu: &Gpu, w: u32, h: u32, y: &[u8], uv: &[u8]) -> FakeFrame {
-            let (ytex, uvtex) = nv12_textures(gpu, w, h, y, uv);
+            let (ytex, utex, vtex) = nv12_textures(gpu, w, h, y, uv);
             // Le carrier que `linux_frames::nv12_planes` et `carrier_dims`
             // deballent. `Box::into_raw` ici, `Box::from_raw` dans `Drop` — c'est
             // exactement la mecanique de `CpuFrames::attach_carrier`.
             let carrier = Box::into_raw(Box::new(crate::linux_frames::VkFrameTex {
                 y: ytex,
-                uv: uvtex,
+                u: utex,
+                v: vtex,
                 width: w,
                 height: h,
             })) as *mut u8;
@@ -4149,5 +4358,273 @@ mod tests {
             let (_, _, rgba) = comp.readback_direct().expect("readback_direct");
             rgba
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Staging exportable en dmabuf
+// ---------------------------------------------------------------------------
+
+/// Un buffer de staging dont la MEMOIRE est exportable en dmabuf, pour qu'un
+/// encodeur materiel puisse la lire sans repasser par le CPU.
+///
+/// POURQUOI IL EN FAUT UN DEUXIEME, ET PAS UN DRAPEAU SUR L'EXISTANT. wgpu
+/// n'expose aucun moyen de demander une allocation exportable : il faut la
+/// fabriquer soi-meme et la lui confier. Or `buffer_from_raw` construit un
+/// `Buffer { block: None }` -- wgpu accepte d'y ECRIRE (c'est une cible de
+/// `copy_texture_to_buffer` comme une autre) mais ne peut pas le faire lire par
+/// le CPU, sa mecanique de mapping passant par ce bloc qu'il ne possede pas.
+/// Le chemin logiciel, lui, DOIT le lire. Les deux ne peuvent donc pas partager
+/// un buffer, et l'export choisit lequel il alloue selon l'encodeur retenu.
+///
+/// La memoire est demandee HOST_VISIBLE et HOST_COHERENT pour que la
+/// verification puisse la relire directement et sans invalidation ; un chemin
+/// purement GPU pourrait se passer des deux.
+pub struct ExportableStaging {
+    /// Vue wgpu, utilisable comme destination de copie. En `Option` UNIQUEMENT
+    /// pour pouvoir la relacher explicitement avant la memoire dans `Drop`, cf.
+    /// l'ordre impose la-bas.
+    buffer: Option<wgpu::Buffer>,
+    /// Le descripteur a passer au consommateur. Possede : ferme dans `Drop`.
+    pub fd: i32,
+    pub size: u64,
+    device: ash::Device,
+    memory: ash::vk::DeviceMemory,
+}
+
+impl ExportableStaging {
+    /// La cible de copie a passer a wgpu.
+    pub fn buffer(&self) -> &wgpu::Buffer {
+        self.buffer.as_ref().expect("buffer relache")
+    }
+}
+
+impl ExportableStaging {
+    /// Relit la memoire exportee telle que le GPU l'a laissee.
+    ///
+    /// Passe par `vkMapMemory` et NON par wgpu, pour la raison ci-dessus. C'est
+    /// ce qui permet de verifier le contenu sans encodeur : si ces octets sont
+    /// ceux du chemin de relecture normal, la memoire exportee porte bien
+    /// l'image composee.
+    pub fn read_back(&self) -> Result<Vec<u8>> {
+        unsafe {
+            let p = self
+                .device
+                .map_memory(self.memory, 0, self.size, ash::vk::MemoryMapFlags::empty())
+                .map_err(|e| anyhow::anyhow!("vkMapMemory: {e}"))?;
+            let out = std::slice::from_raw_parts(p as *const u8, self.size as usize).to_vec();
+            self.device.unmap_memory(self.memory);
+            Ok(out)
+        }
+    }
+}
+
+impl Drop for ExportableStaging {
+    fn drop(&mut self) {
+        // L'ORDRE EST LE FOND DU SUJET, et le premier jet le faisait a l'envers :
+        // il detruisait le `VkBuffer` puis liberait la memoire, alors que wgpu
+        // detruit DEJA le buffer quand son wrapper tombe -- double liberation,
+        // et par-dessus, memoire liberee alors qu'un buffer y etait encore lie.
+        //
+        // Le partage est donc : wgpu possede le HANDLE (il l'a recu par
+        // `buffer_from_raw` et le detruira), nous possedons la MEMOIRE (son
+        // `block` est `None`, personne d'autre ne la liberera). D'ou : relacher
+        // le wrapper d'abord, liberer la memoire ensuite.
+        drop(self.buffer.take());
+        unsafe {
+            self.device.free_memory(self.memory, None);
+        }
+        // Le fd est un handle a part : l'exporter duplique la propriete, donc le
+        // fermer ne libere pas la memoire -- mais l'oublier fuirait un
+        // descripteur par frame.
+        if self.fd >= 0 {
+            let _ = nix_close(self.fd);
+        }
+    }
+}
+
+fn nix_close(fd: i32) -> std::io::Result<()> {
+    // `libc::close` sans dependance supplementaire : la libc est deja liee.
+    extern "C" {
+        fn close(fd: i32) -> i32;
+    }
+    if unsafe { close(fd) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+impl Compositor {
+    /// Alloue un buffer de staging exportable de `size` octets, ou `None` si le
+    /// device n'a pas ete ouvert avec les extensions de memoire externe (cf.
+    /// `d3d_linux::open_device_with_dmabuf_export`).
+    pub fn create_exportable_staging(&self, size: u64) -> Option<ExportableStaging> {
+        use ash::vk;
+        unsafe {
+            self.gpu.device.as_hal::<wgpu_hal::api::Vulkan, _, _>(|hal| {
+                let hal = hal?;
+                let dev = hal.raw_device().clone();
+                let phys = hal.raw_physical_device();
+                let instance = hal.shared_instance().raw_instance();
+
+                let mut ext_info = vk::ExternalMemoryBufferCreateInfo::default()
+                    .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+                let bci = vk::BufferCreateInfo::default()
+                    .push_next(&mut ext_info)
+                    .size(size)
+                    .usage(vk::BufferUsageFlags::TRANSFER_DST)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                let raw = dev.create_buffer(&bci, None).ok()?;
+
+                let req = dev.get_buffer_memory_requirements(raw);
+                let props = instance.get_physical_device_memory_properties(phys);
+                // HOST_VISIBLE pour que `read_back` puisse verifier le contenu,
+                // et COHERENT parce qu'il lit SANS invalider : sur une memoire
+                // seulement visible, le mapping peut rendre des octets perimes et
+                // le test passerait ou echouerait selon le cache, pas selon le
+                // code. Exiger les deux est plus simple qu'un
+                // `vkInvalidateMappedMemoryRanges` correct a chaque lecture.
+                let want = vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT;
+                let mt = (0..props.memory_type_count).find(|i| {
+                    req.memory_type_bits & (1 << i) != 0
+                        && props.memory_types[*i as usize].property_flags.contains(want)
+                })?;
+
+                let mut export = vk::ExportMemoryAllocateInfo::default()
+                    .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+                let mai = vk::MemoryAllocateInfo::default()
+                    .push_next(&mut export)
+                    .allocation_size(req.size)
+                    .memory_type_index(mt);
+                let memory = dev.allocate_memory(&mai, None).ok()?;
+                dev.bind_buffer_memory(raw, memory, 0).ok()?;
+
+                let getter = ash::khr::external_memory_fd::Device::new(instance, &dev);
+                let fd = getter
+                    .get_memory_fd(
+                        &vk::MemoryGetFdInfoKHR::default()
+                            .memory(memory)
+                            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT),
+                    )
+                    .ok()?;
+
+                let hal_buf = wgpu_hal::vulkan::Device::buffer_from_raw(raw);
+                let buffer = self.gpu.device.create_buffer_from_hal::<wgpu_hal::api::Vulkan>(
+                    hal_buf,
+                    &wgpu::BufferDescriptor {
+                        label: Some("staging-exportable"),
+                        size,
+                        usage: wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    },
+                );
+                Some(ExportableStaging { buffer: Some(buffer), fd, size, device: dev, memory })
+            })
+        }
+    }
+}
+
+impl Compositor {
+    /// Compose la frame courante en NV12 et la depose dans `staging`, dont la
+    /// memoire est exportable en dmabuf. Rend la main quand le GPU a fini.
+    ///
+    /// PAS DE RING, PAS DE `map_async`, CONTRAIREMENT A `readback_submit_yuv`.
+    /// Cette variante-ci n'a rien a faire relire par le CPU : le consommateur est
+    /// l'encodeur materiel, qui lit la meme memoire par son fd. Toute la
+    /// mecanique de staging mappe et de recolte differee n'aurait donc personne a
+    /// servir.
+    ///
+    /// NE BLOQUE PAS. Rend l'index de soumission ; l'appelant attend dessus juste
+    /// avant de donner le fd a l'encodeur, ce qui lui laisse la fenetre pour
+    /// composer la frame suivante pendant que celle-ci finit. C'est le meme
+    /// pipelining que la ring de relecture software, avec des tampons
+    /// exportables a la place des buffers mappes.
+    pub unsafe fn compose_into_dmabuf(
+        &self,
+        staging: &ExportableStaging,
+    ) -> Result<wgpu::SubmissionIndex> {
+        self.ensure_yuv_fmt(YuvFormat::Nv12)?;
+        let (bpr_y, bpr_uv, off_uv, total) = {
+            let g = self.yuv.borrow();
+            let t = g.as_ref().expect("ensure_yuv");
+            (t.bpr_y, t.bpr_uv, t.off_u, t.total)
+        };
+        if staging.size < total {
+            anyhow::bail!("staging de {} octets pour {total} attendus", staging.size);
+        }
+        let (w, h) = (self.render_w, self.render_h);
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("yuv-dmabuf") });
+        {
+            let g = self.yuv.borrow();
+            let t = g.as_ref().expect("ensure_yuv");
+            let (uv_view, pipe_uv, _uv) = match &t.chroma {
+                Chroma::Interleaved { uv_view, pipe_uv, _uv } => (uv_view, pipe_uv, _uv),
+                Chroma::Planar { .. } => {
+                    anyhow::bail!("compose_into_dmabuf attend des cibles NV12")
+                }
+            };
+            for (view, pipe) in [(&t.y_view, &t.pipe_y), (uv_view, pipe_uv)] {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("yuv-dmabuf-plane"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(pipe);
+                pass.set_bind_group(0, &t.bind, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            for (tex, off, bpr, pw, ph) in
+                [(&t._y, 0u64, bpr_y, w, h), (_uv, off_uv, bpr_uv, cw, ch)]
+            {
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: staging.buffer(),
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: off,
+                            bytes_per_row: Some(bpr),
+                            rows_per_image: Some(ph),
+                        },
+                    },
+                    wgpu::Extent3d { width: pw, height: ph, depth_or_array_layers: 1 },
+                );
+            }
+        }
+        Ok(self.gpu.context.submit(std::iter::once(encoder.finish())))
+    }
+
+    /// Attend qu'une soumission soit terminee.
+    ///
+    /// INDISPENSABLE AVANT DE PASSER LE FD. L'encodeur lit cette memoire par un
+    /// chemin que wgpu ignore : rien d'autre ne garantirait que la copie a bien
+    /// atterri.
+    pub fn wait_submission(&self, idx: wgpu::SubmissionIndex) {
+        self.gpu.device.poll(wgpu::Maintain::WaitForSubmissionIndex(idx));
+    }
+
+    /// La geometrie NV12 courante, pour decrire le dmabuf au consommateur.
+    pub fn nv12_geometry(&self) -> (u32, u32, u64, u64) {
+        Compositor::yuv_layout_for(self.render_w, self.render_h, YuvFormat::Nv12)
     }
 }
