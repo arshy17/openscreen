@@ -129,8 +129,25 @@ private struct PhotosPickerView: View {
 	}
 }
 
+@MainActor
+private final class PhotosPickerAppDelegate: NSObject, NSApplicationDelegate {
+	func applicationDidFinishLaunching(_ notification: Notification) {
+		// This helper is spawned as a signed executable inside Open Screen rather
+		// than opened as its own .app bundle. AppKit otherwise leaves it as a
+		// background accessory behind the editor, even though SwiftUI created a
+		// perfectly valid window. Make the user-requested picker visible and key.
+		NSApplication.shared.setActivationPolicy(.regular)
+		DispatchQueue.main.async {
+			NSApplication.shared.activate(ignoringOtherApps: true)
+			NSApplication.shared.windows.first?.center()
+			NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
+		}
+	}
+}
+
 @main
 private struct OpenScreenPhotosPickerApp: App {
+	@NSApplicationDelegateAdaptor(PhotosPickerAppDelegate.self) private var appDelegate
 	@StateObject private var coordinator = PickerCoordinator()
 
 	var body: some Scene {
