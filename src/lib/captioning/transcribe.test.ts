@@ -109,6 +109,25 @@ describe("transcribeMono16kToSegments", () => {
 		});
 	});
 
+	it("forwards Persian explicitly and preserves Farsi word text", async () => {
+		mockApi.transcribe.mockResolvedValueOnce({
+			segments: [],
+			wordSegments: [
+				{ word: "سلام", startSec: 0, endSec: 0.35 },
+				{ word: "دنیا", startSec: 0.36, endSec: 0.72 },
+			],
+			detectedLanguage: "fa",
+			backend: "whisper-cpu",
+		});
+
+		const samples = new Float32Array(1600);
+		const result = await transcribeMono16kToSegments(samples, { language: "fa" });
+
+		expect(mockApi.transcribe).toHaveBeenCalledWith({ samples, language: "fa" });
+		expect(result.detectedLanguage).toBe("fa");
+		expect(result.segments.map((segment) => segment.text)).toEqual(["سلام", "دنیا"]);
+	});
+
 	it("falls back to phrase segments with granularity 'phrase' when alignment returns no words", async () => {
 		mockApi.transcribe.mockResolvedValueOnce({
 			segments: [{ text: "hello world", startSec: 0, endSec: 0.65 }],

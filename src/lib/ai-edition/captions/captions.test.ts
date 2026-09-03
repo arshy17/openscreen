@@ -611,6 +611,12 @@ describe("captionTranslationUnits", () => {
 		expect(captionTranslationUnits(t)).toHaveLength(2);
 	});
 
+	it("ends a Persian translation unit at the Persian question mark", () => {
+		const t = wordPerSegmentTranscript();
+		t.segments[2].text = "هستید؟";
+		expect(captionTranslationUnits(t).map((unit) => unit.segmentIds.length)).toEqual([3, 4]);
+	});
+
 	it("keys units so they cannot be confused with a bare segment id", () => {
 		const units = captionTranslationUnits(wordPerSegmentTranscript());
 		expect(units[0].id).toBe("u:seg_1");
@@ -642,6 +648,29 @@ describe("translated caption layout", () => {
 			expect(cue.text.split(" ").length).toBeLessThanOrEqual(4);
 		}
 		expect(cues.map((c) => c.text).join(" ")).toBe("Welcome to OpenScreen the screen capture app");
+	});
+
+	it("preserves Persian text exactly in derived preview and export cues", () => {
+		const persian = "سلام، به OpenScreen خوش آمدید";
+		const cues = deriveCaptionCues(
+			wordPerSegmentDoc(),
+			{ ...ON, language: "fa", minWordsPerLine: 2, maxWordsPerLine: 4 },
+			{
+				fa: {
+					language: "fa",
+					label: "فارسی (Farsi / Persian)",
+					updatedAt: "",
+					byAsset: { "asset-1": { "u:seg_1": persian } },
+				},
+			},
+		);
+
+		expect(cues.map((cue) => cue.text).join(" ")).toBe(persian);
+		expect(captionCuesToTextRegions(cues, { ...ON, language: "fa" }, LANDSCAPE)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ content: expect.stringContaining("سلام") }),
+			]),
+		);
 	});
 
 	it("lays the original out the same way, so switching language only swaps text", () => {

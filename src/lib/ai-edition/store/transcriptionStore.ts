@@ -81,7 +81,10 @@ interface TranscriptionState {
 	 * whose first (primary) media is a silent screen capture would otherwise
 	 * leave that button unable to transcribe the talking clip next to it.
 	 */
-	requestTimelineTranscripts: () => Promise<void>;
+	requestTimelineTranscripts: (
+		language?: string,
+		options?: { replaceExisting?: boolean },
+	) => Promise<void>;
 	reset: () => void;
 }
 
@@ -157,12 +160,12 @@ export const useTranscriptionStore = create<TranscriptionState>((set, get) => ({
 		return settled;
 	},
 
-	requestTimelineTranscripts() {
+	requestTimelineTranscripts(language = "auto", options) {
 		const document = useProjectStore.getState().document;
 		if (!document) return Promise.resolve();
 		get().sync(document);
 		const targets = transcriptRelevantAssetIds(document).filter((assetId) => {
-			if (findAssetTranscript(document, assetId)) return false;
+			if (!options?.replaceExisting && findAssetTranscript(document, assetId)) return false;
 			// A media with no audio track can only fail again — asking for it here
 			// would buy the user a run and an error toast for nothing. The per-asset
 			// regenerate in the media stage stays available for the stubborn case.
@@ -171,11 +174,16 @@ export const useTranscriptionStore = create<TranscriptionState>((set, get) => ({
 		if (targets.length === 0) return Promise.resolve();
 		return Promise.all(
 			targets.map((assetId) => {
-				// Already queued or running: the background pass owns that run, so
-				// wait for it instead of superseding it with an identical one.
+				// Already queued or running in the SAME language: wait for it instead
+				// of transcribing the same asset twice. A forced-language request must
+				// supersede an automatic background run, though — otherwise choosing
+				// Persian while auto-detection is running appears to work but stores the
+				// auto-detected transcript instead.
 				const job = get().jobs[assetId];
-				if (job && job.status !== "failed") return waitForSettle(assetId);
-				return get().request(assetId);
+				if (job && job.status !== "failed" && job.language === language) {
+					return waitForSettle(assetId);
+				}
+				return get().request(assetId, language);
 			}),
 		).then(() => undefined);
 	},

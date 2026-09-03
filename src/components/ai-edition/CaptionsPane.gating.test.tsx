@@ -6,7 +6,7 @@
 // pointless click.
 
 import "@testing-library/jest-dom";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import type { AxcutAsset, AxcutDocument } from "@/lib/ai-edition/schema";
@@ -83,6 +83,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	cleanup();
+	vi.restoreAllMocks();
 });
 
 describe("captions pane gating", () => {
@@ -94,6 +95,25 @@ describe("captions pane gating", () => {
 			</I18nProvider>,
 		);
 		expect(screen.getByRole("button", { name: "Transcribe video" })).toBeEnabled();
+	});
+
+	it("offers Persian / Farsi as an explicit local caption-creation language", () => {
+		load(documentWith(ASSET));
+		const request = vi
+			.spyOn(useTranscriptionStore.getState(), "requestTimelineTranscripts")
+			.mockResolvedValue();
+		render(
+			<I18nProvider>
+				<CaptionsPane />
+			</I18nProvider>,
+		);
+
+		const language = screen.getByRole("combobox", { name: "Language: Regenerate as" });
+		expect(screen.getByRole("option", { name: /Persian.*Farsi.*فارسی/i })).toBeInTheDocument();
+		fireEvent.change(language, { target: { value: "fa" } });
+		fireEvent.click(screen.getByRole("button", { name: "Transcribe video" }));
+
+		expect(request).toHaveBeenCalledWith("fa", { replaceExisting: false });
 	});
 
 	it("shows the queued background run instead of an idle button", () => {

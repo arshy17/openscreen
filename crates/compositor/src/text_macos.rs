@@ -765,6 +765,21 @@ mod tests {
         );
     }
 
+    /// Persian captions must reach CoreText as Unicode and produce real glyphs.
+    /// CoreText supplies the script-capable fallback when the chosen Latin UI
+    /// family (Helvetica here, Inter in the app) does not contain Persian.
+    #[test]
+    fn persian_caption_uses_coretext_shaping_and_font_fallback() {
+        let mut s = spec("سلام، به OpenScreen خوش آمدید");
+        s.box_px = [900, 180];
+        let Some((px, w, h)) = raster_bgra(&s) else {
+            return;
+        };
+        let (x0, y0, x1, y1) = ink_bounds(&px, w, h);
+        assert!(x1 - x0 > 120, "Persian caption was rendered as an implausibly narrow fallback");
+        assert!(y1 - y0 > 12, "Persian caption has no readable glyph height");
+    }
+
     /// Le bug rapporté : une ligne de sous-titre se collait en haut de sa bande et laissait
     /// ~180 px de vide en dessous. La bande fait 22 % de la hauteur de l'image, donc la
     /// boîte est toujours bien plus haute que le texte — le bloc doit y être centré.

@@ -14,7 +14,7 @@ OpenScreen builds its renderer, Electron main process, preload bridge, native he
 | `npm run build:win:store` | Performs the Windows native and renderer build, then asks electron-builder for the configured AppX Store package. |
 | `npm run build:linux` | Checks TypeScript, runs Vite, then packages AppImage, Debian, pacman, and RPM artifacts without npm rebuild. Its explicit `--linux` target list overrides `linux.target` in `electron-builder.json5`, so a target added to the config alone is never built. |
 | `npm run build:native:mac` | Uses SwiftPM to build requested single-architecture ScreenCaptureKit and macOS cursor helpers and stages them under `electron/native/bin/darwin-*`. |
-| `npm run install:custom:mac-beta` | Clean-builds, manifests, locally signs, backs up, atomically installs, verifies, and reopens the private `1.10.1-beta.2` app as `/Applications/Open Screen.app`. It requires the exact pinned Node/npm toolchain and never publishes an update. |
+| `npm run install:custom:mac-beta` | Clean-builds, manifests, locally signs, backs up, atomically installs, verifies, and reopens the private `1.10.1-beta.3` app as `/Applications/Open Screen.app`. It requires the exact pinned Node/npm toolchain and never publishes an update. |
 | `npm run build:native:win` | Uses CMake/Ninja in an MSVC environment to build WGC capture and cursor-sampler executables and stage x64 binaries. |
 | `npm run build:native:compositor` | Uses Cargo/MSVC and the pinned shared FFmpeg SDK to build `compositor_view.node`. |
 | `npm run build:whisper-binaries` | Runs the whisper.cpp CMake build and stages the speech-to-text executable plus ggml backend sidecars for the host. |

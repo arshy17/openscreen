@@ -156,6 +156,18 @@ test.describe("v4 editor shell", () => {
 		await expect(popover).toBeHidden();
 	});
 
+	test("captions exposes an explicit Persian Farsi transcription language", async ({ page }) => {
+		await seedAndOpen(page);
+
+		await page.getByRole("button", { name: "Captions" }).click();
+		const language = page.getByRole("combobox", { name: "Language: Regenerate as" });
+		await expect(language).toBeVisible();
+		await expect(language.locator('option[value="fa"]')).toHaveText(/Persian.*Farsi.*فارسی/);
+
+		await language.selectOption("fa");
+		await expect(language).toHaveValue("fa");
+	});
+
 	test("ctrl+wheel over the tracks zooms the timeline, bounded at 2% of its span", async ({
 		page,
 	}) => {

@@ -676,26 +676,27 @@ filters them off the document — gated on the user's confirmation, since
 it deletes data
 ([`src/components/ai-edition/CaptionsPane.tsx:154-161`](../../src/components/ai-edition/CaptionsPane.tsx:154)).
 
-## Known gaps
+## Language selection and remaining gaps
 
-- **Language selector.** The "Regenerate as" picker offers `"auto"` plus
-  every language the `small` multilingual model resolves. There is one
-  copy of it — `MediaStage.tsx`'s Media stage panel
-  ([`src/components/ai-edition/v4/MediaStage.tsx`](../../src/components/ai-edition/v4/MediaStage.tsx)),
-  the one `NewEditorShell` mounts. A second, unreachable copy lived in the
-  v3 left panel's transcript modal until it was deleted along with the rest
-  of that orphaned surface (see
-  [decisions.md](decisions.md)) — it had already absorbed two language
-  fixes that never reached a user. `TRANSCRIPT_LANGUAGE_CODES` in
+- **Shared language selector.** The "Regenerate as" picker offers `"auto"` plus
+  every language the `small` multilingual model resolves. It is available both
+  from the Media stage asset card and the visible Captions inspector. The two
+  surfaces share `sortedLanguageOptions`, so their labels and supported language
+  codes cannot drift. Persian can be forced with `fa`, shown explicitly as
+  **Persian (Farsi) — فارسی**, and an existing transcript can be regenerated in
+  that language. Persian is also an available caption-translation target, and
+  editable transcript content uses `dir="auto"` so Persian text lays out
+  right-to-left while mixed Latin text and numbers remain usable.
+
+  `TRANSCRIPT_LANGUAGE_CODES` in
   [`src/lib/ai-edition/schema/index.ts`](../../src/lib/ai-edition/schema/index.ts)
   mirrors whisper.cpp's own `g_lang` table verbatim — a code outside that
   list fails to resolve a language id in `wparams.language`
   (`electron/native/whisper-stt/src/main.cpp`) — and `languageLabel` /
   `sortedLanguageOptions` in
   [`src/lib/ai-edition/transcription/languageLabels.ts`](../../src/lib/ai-edition/transcription/languageLabels.ts)
-  are the single place the picker builds its options and labels from, so a
-  future second entry point cannot drift from it the way a hand-duplicated
-  list would. Option labels come from `Intl.DisplayNames` in the active UI
+  are the single place both pickers build their options and labels from.
+  Option labels come from `Intl.DisplayNames` in the active UI
   locale, falling back to whisper.cpp's own English name for a code that
   locale's ICU data can't resolve. Forcing a language skips detection on the
   first window and slightly improves WER.

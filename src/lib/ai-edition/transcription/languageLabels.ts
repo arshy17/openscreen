@@ -147,13 +147,18 @@ function displayNamesFor(locale: string): Intl.DisplayNames | null {
  * `ENGLISH_NAMES` recognizes it.
  */
 export function languageLabel(code: string, locale: string): string {
+	let label: string | null = null;
 	try {
 		const resolved = displayNamesFor(locale)?.of(code);
-		if (resolved && resolved.toLowerCase() !== code.toLowerCase()) return resolved;
+		if (resolved && resolved.toLowerCase() !== code.toLowerCase()) label = resolved;
 	} catch {
 		// Malformed/unsupported subtag for this Intl implementation.
 	}
-	return ENGLISH_NAMES[code as WhisperLanguageCode] ?? code;
+	label ??= ENGLISH_NAMES[code as WhisperLanguageCode] ?? code;
+	// "Persian" and "Farsi" name the same language, but users commonly search
+	// for either term. Keep the native-script name in the picker as a visual
+	// confirmation that this is the RTL Persian option rather than Arabic.
+	return code === "fa" ? `${label} (Farsi) — فارسی` : label;
 }
 
 export interface LanguageOption {

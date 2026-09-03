@@ -73,6 +73,20 @@ describe("transcribeAsset language handling", () => {
 		expect(t.language).toBe("fr");
 	});
 
+	it("creates an editable Persian transcript without changing Unicode text", async () => {
+		transcribeMock.mockResolvedValueOnce({
+			segments: [{ startSec: 0, endSec: 1.4, text: "سلام دنیا" }],
+			granularity: "phrase",
+			detectedLanguage: "fa",
+		});
+
+		const transcript = await transcribeAsset(makeDoc(), "asset_1", { language: "fa" });
+
+		expect(transcript.language).toBe("fa");
+		expect(transcript.segments[0].text).toBe("سلام دنیا");
+		expect(transcript.words.map((word) => word.text)).toEqual(["سلام", "دنیا"]);
+	});
+
 	it("omits the language option from the worker call when 'auto' so Whisper detects", async () => {
 		transcribeMock.mockResolvedValueOnce({
 			segments: [{ startSec: 0, endSec: 1, text: "hello" }],

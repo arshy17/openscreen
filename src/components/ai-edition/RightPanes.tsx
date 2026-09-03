@@ -1210,6 +1210,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 				<div
 					ref={editorRef}
 					role="textbox"
+					dir="auto"
 					tabIndex={0}
 					contentEditable={!busy}
 					aria-busy={busy}
@@ -1456,6 +1457,7 @@ const TranscriptWord = memo(function TranscriptWord({
 				<>
 					<input
 						ref={inputRef}
+						dir="auto"
 						data-transcript-word-editor="true"
 						contentEditable={false}
 						value={draft}

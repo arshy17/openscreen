@@ -11,19 +11,21 @@
 
 import { Captions as CaptionsIcon, Languages, Loader2, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useScopedT } from "@/contexts/I18nContext";
+import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import type { CaptionAnchorH, CaptionAnchorV } from "@/lib/ai-edition/captions";
 import {
 	CAPTION_INSET_X_MAX,
 	CAPTION_INSET_Y_MAX,
 	untranslatedUnits,
 } from "@/lib/ai-edition/captions";
+import type { TranscriptLanguageCode } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useTimelineTranscriptGate,
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
+import { sortedLanguageOptions } from "@/lib/ai-edition/transcription/languageLabels";
 import { nativeBridgeClient } from "@/native";
 import { ColorField } from "./ColorField";
 import styles from "./NewEditorShell.module.css";
@@ -64,6 +66,7 @@ const TRANSLATION_LANGUAGES: ReadonlyArray<{ code: string; label: string }> = [
 	{ code: "tr", label: "Türkçe" },
 	{ code: "ru", label: "Русский" },
 	{ code: "ar", label: "العربية" },
+	{ code: "fa", label: "فارسی (Farsi / Persian)" },
 	{ code: "hi", label: "हिन्दी" },
 	{ code: "ja", label: "日本語" },
 	{ code: "ko", label: "한국어" },
@@ -73,6 +76,7 @@ const TRANSLATION_LANGUAGES: ReadonlyArray<{ code: string; label: string }> = [
 export function CaptionsPane() {
 	const t = useScopedT("settings");
 	const te = useScopedT("editor");
+	const { locale } = useI18n();
 	const {
 		settings,
 		translations,
@@ -104,6 +108,8 @@ export function CaptionsPane() {
 	const engineError = gate.state === "blocked" && gate.reason === "failed" ? gate.message : null;
 
 	const [target, setTarget] = useState<string>(TRANSLATION_LANGUAGES[1].code);
+	const [transcriptionLanguage, setTranscriptionLanguage] =
+		useState<TranscriptLanguageCode>("auto");
 	const [translating, setTranslating] = useState(false);
 	const [translateError, setTranslateError] = useState<string | null>(null);
 
@@ -117,6 +123,13 @@ export function CaptionsPane() {
 
 	const disabled = !hasDocument;
 	const languageOptions = useMemo(() => Object.values(translations), [translations]);
+	const transcriptionLanguageOptions = useMemo(
+		() => sortedLanguageOptions(locale, te("mediaStage.auto")),
+		[locale, te],
+	);
+
+	const handleTranscribe = () =>
+		requestTimelineTranscripts(transcriptionLanguage, { replaceExisting: hasTranscript });
 
 	const handleTranslate = async () => {
 		const doc = useProjectStore.getState().document;
@@ -198,6 +211,52 @@ export function CaptionsPane() {
 					/>
 				</div>
 
+				{/* ── Caption creation language ──────────────────────────── */}
+				<div className={styles.sectionLabel}>{te("mediaStage.regenerateAs")}</div>
+				<div className={styles.paneRow}>
+					<span className={styles.label}>{t("captions.language")}</span>
+					<select
+						aria-label={`${t("captions.language")}: ${te("mediaStage.regenerateAs")}`}
+						value={transcriptionLanguage}
+						disabled={disabled || isTranscribing || silentMedia}
+						onChange={(event) =>
+							setTranscriptionLanguage(event.target.value as TranscriptLanguageCode)
+						}
+						style={selectStyle}
+					>
+						{transcriptionLanguageOptions.map(({ code, label }) => (
+							<option key={code} value={code}>
+								{label}
+							</option>
+						))}
+					</select>
+				</div>
+				<div style={{ margin: "0 var(--sp-4) 12px", display: "flex", gap: 8 }}>
+					<button
+						type="button"
+						className={`${styles.btn} ${styles.btnPrimary}`}
+						disabled={disabled || isTranscribing || silentMedia}
+						onClick={() => void handleTranscribe()}
+						style={{ flex: 1 }}
+					>
+						{isTranscribing ? <Loader2 size={14} className="animate-spin" /> : null}
+						{isTranscribing
+							? t("captions.transcribing")
+							: hasTranscript
+								? te("mediaStage.regenerate")
+								: t("captions.transcribe")}
+					</button>
+				</div>
+				<p
+					style={{
+						margin: "0 var(--sp-4) 12px",
+						font: "400 11px/1.5 var(--font-body)",
+						color: "var(--meta)",
+					}}
+				>
+					{t("transcript.whisperHint")}
+				</p>
+
 				{!hasTranscript ? (
 					<div
 						style={{
@@ -224,17 +283,6 @@ export function CaptionsPane() {
 								{engineError}
 							</p>
 						) : null}
-						<button
-							type="button"
-							className={`${styles.btn} ${styles.btnPrimary}`}
-							// A media with no audio track has nothing to transcribe — the
-							// button would fail the same way every time it is pressed.
-							disabled={disabled || isTranscribing || silentMedia}
-							onClick={() => void requestTimelineTranscripts()}
-						>
-							{isTranscribing ? <Loader2 size={14} className="animate-spin" /> : null}
-							{isTranscribing ? t("captions.transcribing") : t("captions.transcribe")}
-						</button>
 					</div>
 				) : !hasCaptionableText ? (
 					<div

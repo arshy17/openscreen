@@ -122,6 +122,11 @@ beforeEach(() => {
 });
 
 describe("transcript word corrections", () => {
+	it("lets Chromium choose right-to-left direction for Persian transcript text", () => {
+		const { editor } = renderPane([]);
+		expect(editor.getAttribute("dir")).toBe("auto");
+	});
+
 	it("commits a corrected word through the document callback", () => {
 		const onUpdateWordText = vi.fn();
 		const { container } = renderPane([], vi.fn(), [], onUpdateWordText);

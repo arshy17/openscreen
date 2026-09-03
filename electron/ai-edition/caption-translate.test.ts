@@ -13,6 +13,13 @@ describe("parseTranslationReply", () => {
 		expect(parseTranslationReply(raw)).toEqual({ seg_1: "bonjour" });
 	});
 
+	it("preserves Persian Unicode and right-to-left punctuation", () => {
+		const raw = '[{"id":"seg_1","text":"سلام، به OpenScreen خوش آمدید؟"}]';
+		expect(parseTranslationReply(raw)).toEqual({
+			seg_1: "سلام، به OpenScreen خوش آمدید؟",
+		});
+	});
+
 	it("reads an array buried in a lead-in sentence", () => {
 		const raw = 'Here you go:\n[{"id":"seg_1","text":"bonjour"}]\nHope that helps!';
 		expect(parseTranslationReply(raw)).toEqual({ seg_1: "bonjour" });

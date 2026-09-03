@@ -470,6 +470,15 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 - [ ] Add an artwork design as a 1–3 second opening card. Confirm a separate linked project is created, its H.264/AAC card leads the video, original modifiers remain aligned, and the source project hash does not change.
 - [ ] At 1280×720 and the current Retina workspace, open Artwork Studio, every panel and each mock preview. Verify no titlebar overlap, unreachable controls, horizontal overflow, or hidden export/import action.
 
+## Persian / Farsi captions — 1.10.1-beta.3
+
+- [ ] Open Captions, choose **Persian (Farsi) — فارسی**, and transcribe a real spoken-Persian recording. Confirm the resulting transcript language is `fa` and that automatic language detection remains available separately.
+- [ ] Regenerate an existing transcript as Persian and confirm the new result replaces the old transcript only after the explicit action completes.
+- [ ] Edit Persian words in the transcript, including mixed Persian/Latin text, Persian and Western numerals, and `؟` punctuation. Confirm right-to-left layout remains readable and word timings are unchanged.
+- [ ] Toggle captions, scrub and play through the Persian text, then save/reopen and export MP4. Confirm the edited Persian text matches the transcript, preview, reopened project, and decoded exported frames exactly.
+- [ ] With local Qwen configured, translate captions into **فارسی (Farsi / Persian)**. Review the proposal before applying it, then switch between translated and original captions without changing source timings.
+- [ ] At 1280×720 and the current Retina workspace, open the Persian language picker and transcript editor. Confirm the selector, action, RTL content, caption controls, and timeline remain reachable without overlap.
+
 ## Results log
 
 | Date | Build / tag | Platform | Pass/fail | Notes |

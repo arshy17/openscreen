@@ -395,6 +395,73 @@ describe("useTranscriptionStore", () => {
 		]);
 	});
 
+	it("regenerates existing timeline captions in explicitly selected Persian", async () => {
+		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the preload bridge
+		delete (window as any).electronAPI;
+		transcribeMocks.transcribeAsset.mockImplementation(
+			async (_doc: AxcutDocument, assetId: string, options: { language?: string }) => ({
+				...transcriptFor(assetId),
+				language: options.language ?? "auto",
+				segments: [
+					{
+						id: "seg_1",
+						kind: "speech",
+						startSec: 0,
+						endSec: 1,
+						text: "سلام دنیا",
+						wordIds: ["word_1"],
+					},
+				],
+				words: [
+					{
+						id: "word_1",
+						segmentId: "seg_1",
+						startSec: 0,
+						endSec: 1,
+						text: "سلام دنیا",
+					},
+				],
+			}),
+		);
+		const existing = transcriptFor("asset_1");
+		const doc = makeDoc(["asset_1"]);
+		loadDocument({
+			...doc,
+			transcript: existing,
+			transcripts: [existing],
+			timeline: {
+				...doc.timeline,
+				clips: [
+					{
+						id: "clip_1",
+						assetId: "asset_1",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 0,
+						timelineEndSec: 10,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+				],
+			},
+		} as AxcutDocument);
+
+		await useTranscriptionStore
+			.getState()
+			.requestTimelineTranscripts("fa", { replaceExisting: true });
+
+		expect(transcribeMocks.transcribeAsset).toHaveBeenCalledWith(
+			expect.anything(),
+			"asset_1",
+			expect.objectContaining({ language: "fa" }),
+		);
+		expect(useProjectStore.getState().document?.transcripts[0]).toMatchObject({
+			language: "fa",
+			segments: [expect.objectContaining({ text: "سلام دنیا" })],
+		});
+	});
+
 	it("waits for the background run instead of transcribing the same asset twice", async () => {
 		const firstRun = deferred();
 		transcribeMocks.transcribeAsset.mockImplementation(

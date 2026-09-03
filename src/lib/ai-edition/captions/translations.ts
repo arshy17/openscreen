@@ -189,8 +189,8 @@ const UNIT_BREAK_GAP_SEC = 0.6;
 /** Hard cap so one unbroken monologue still gets translated in digestible parts. */
 const UNIT_MAX_WORDS = 40;
 
-/** Sentence-final punctuation, Latin + CJK, allowing trailing quotes/brackets. */
-const SENTENCE_END = /[.!?…。！？](["'”’)\]]*)$/;
+/** Sentence-final punctuation, Latin + Persian/Arabic + CJK, allowing trailing quotes/brackets. */
+const SENTENCE_END = /[.!?؟…。！？](["'”’)\]]*)$/;
 
 /**
  * Keys are prefixed so they can never collide with a bare segment id. An earlier

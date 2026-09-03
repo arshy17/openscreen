@@ -71,7 +71,7 @@ function findPackagedApp(directory) {
 }
 
 if (process.platform !== "darwin") fail("The private beta installer can only run on macOS.");
-if (packageJson.version !== "1.10.1-beta.2") {
+if (packageJson.version !== "1.10.1-beta.3") {
 	fail(`Refusing an unexpected private-beta version: ${packageJson.version}`);
 }
 if (process.version.replace(/^v/, "") !== packageJson.engines.node) {
